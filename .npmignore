@@ -1,0 +1,11 @@
+src
+examples
+coverage
+node_modules
+.github
+biome.json
+tsconfig.json
+tsup.config.ts
+vitest.config.ts
+*.test.ts
+.gitignore

@@ -1,0 +1,3057 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Tamara Public APIs v1.0",
+    "version": "1.0.0",
+    "contact": {}
+  },
+  "servers": [
+    {
+      "url": "https://{environment}.tamara.co/",
+      "variables": {
+        "environment": {
+          "enum": [
+            "api-sandbox",
+            "api"
+          ],
+          "default": "api-sandbox",
+          "description": "Choose the environment you'd like to test on, either Sandbox (uses testing API tokens) `api-sandbox` or Production (uses live API tokens) `api`"
+        }
+      }
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Enter the API token that is provided by Tamara to be sent in Authorization header."
+      }
+    }
+  },
+  "security": [
+    {
+      "bearerToken": []
+    }
+  ],
+  "paths": {
+    "/checkout": {
+      "post": {
+        "tags": [
+          "Online Checkout"
+        ],
+        "summary": "Create Checkout Session",
+        "description": "This endpoint facilitates the creation of a checkout session, where all payment information is sent within the request to enable customer payments via Tamara. The response will include `order_id`, `checkout_id` , `status` and `checkout_url`. <br /> <br /> Please store the `order_id` in your DBs to fetch the information about the order later and direct the customer to the `checkout_url` to seamlessly conclude the transaction through Tamara.",
+        "operationId": "createCheckoutSession",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "order_reference_id",
+                  "total_amount",
+                  "description",
+                  "country_code",
+                  "payment_type",
+                  "items",
+                  "consumer",
+                  "shipping_address",
+                  "tax_amount",
+                  "shipping_amount",
+                  "merchant_url",
+                  "instalments"
+                ],
+                "properties": {
+                  "total_amount": {
+                    "type": "object",
+                    "description": "Total amount to be charged to consumer.",
+                    "properties": {
+                      "amount": {
+                        "type": "number",
+                        "example": 300,
+                        "minimum": 0.1,
+                        "default": 300
+                      },
+                      "currency": {
+                        "type": "string",
+                        "enum": [
+                          "SAR",
+                          "AED",
+                          "BHD",
+                          "KWD",
+                          "OMR"
+                        ],
+                        "example": "SAR",
+                        "default": "SAR"
+                      }
+                    }
+                  },
+                  "shipping_amount": {
+                    "type": "object",
+                    "description": "Total amount for the shipping of the order.",
+                    "properties": {
+                      "amount": {
+                        "type": "string",
+                        "example": 0,
+                        "minimum": 0,
+                        "default": 1
+                      },
+                      "currency": {
+                        "type": "string",
+                        "enum": [
+                          "SAR",
+                          "AED",
+                          "BHD",
+                          "KWD",
+                          "OMR"
+                        ],
+                        "example": "SAR",
+                        "default": "SAR"
+                      }
+                    }
+                  },
+                  "tax_amount": {
+                    "type": "object",
+                    "description": "Total amount of taxes, if additionally applied.",
+                    "properties": {
+                      "amount": {
+                        "type": "string",
+                        "example": 0,
+                        "minimum": 0,
+                        "default": 1
+                      },
+                      "currency": {
+                        "type": "string",
+                        "enum": [
+                          "SAR",
+                          "AED",
+                          "BHD",
+                          "KWD",
+                          "OMR"
+                        ],
+                        "example": "SAR",
+                        "default": "SAR"
+                      }
+                    }
+                  },
+                  "order_reference_id": {
+                    "type": "string",
+                    "description": "Unique order ID from the merchant's side, which will be used for settlement and reporting purposes. Can be modified after the checkout session is created.",
+                    "example": "A1231234123",
+                    "default": "abd12331-a123-1234-4567-fbde34ae"
+                  },
+                  "order_number": {
+                    "type": "string",
+                    "description": "The order number from the merchant side, this will be used for communication with the customer. If this value is not passed, the order_number will take the order_reference_id value.",
+                    "example": "A1231234123",
+                    "default": "A123125"
+                  },
+                  "discount": {
+                    "type": "object",
+                    "required": [
+                      "name",
+                      "amount"
+                    ],
+                    "description": "This object is used to mention any customer-specific discount/voucher code being used for this specific order, but not to be used for site-wide discounts.",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "example": "Christmas 2020",
+                        "default": "Voucher A"
+                      },
+                      "amount": {
+                        "type": "object",
+                        "properties": {
+                          "amount": {
+                            "type": "number",
+                            "example": 200,
+                            "minimum": 0,
+                            "default": 0
+                          },
+                          "currency": {
+                            "type": "string",
+                            "enum": [
+                              "SAR",
+                              "AED",
+                              "BHD",
+                              "KWD",
+                              "OMR"
+                            ],
+                            "example": "SAR",
+                            "default": "SAR"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "reference_id",
+                        "type",
+                        "name",
+                        "sku",
+                        "quantity",
+                        "total_amount"
+                      ],
+                      "description": "An array of objects to detail the items in this order as seperate objects for each item.",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "description": "Product name. `<=255 characters`.",
+                          "example": "Lego City 8601",
+                          "maximum": 255,
+                          "default": "Lego City 8601"
+                        },
+                        "quantity": {
+                          "type": "number",
+                          "description": "The quantity being purchased for this specific item.",
+                          "example": 1,
+                          "default": 1
+                        },
+                        "reference_id": {
+                          "type": "string",
+                          "description": "The unique id of the item from merchant's side",
+                          "example": "123",
+                          "default": "123"
+                        },
+                        "type": {
+                          "type": "string",
+                          "example": "Digital, Physical...etc.",
+                          "default": "Physical"
+                        },
+                        "sku": {
+                          "type": "string",
+                          "description": "Product SKU. **`<= 128 characters`**",
+                          "example": "SA-12436",
+                          "maximum": 128,
+                          "default": "SA-12345"
+                        },
+                        "item_url": {
+                          "type": "string",
+                          "description": "URL of the item from merchant's website. **`<= 1024 characters`**",
+                          "format": "uri",
+                          "example": "SA-12436",
+                          "maximum": 1024,
+                          "default": "https://item-url.com/1234"
+                        },
+                        "image_url": {
+                          "type": "string",
+                          "description": "URL to an image of the product that can be later displayed to the customer. **`<= 1024 characters`** <br /> **Size** = 2-3 MB maximum <br /> **Resolution** WxH = 1024xY (the Y height of image should be small).",
+                          "format": "uri",
+                          "example": "SA-12436",
+                          "maximum": 1024,
+                          "default": "https://image-url.com/1234"
+                        },
+                        "unit_price": {
+                          "type": "object",
+                          "properties": {
+                            "amount": {
+                              "type": "number",
+                              "example": 490,
+                              "default": 100
+                            },
+                            "currency": {
+                              "type": "string",
+                              "enum": [
+                                "SAR",
+                                "AED",
+                                "BHD",
+                                "KWD",
+                                "OMR"
+                              ],
+                              "example": "SAR",
+                              "default": "SAR"
+                            }
+                          }
+                        },
+                        "tax_amount": {
+                          "type": "object",
+                          "properties": {
+                            "amount": {
+                              "type": "number",
+                              "example": 10,
+                              "minimum": 0,
+                              "default": 1
+                            },
+                            "currency": {
+                              "type": "string",
+                              "enum": [
+                                "SAR",
+                                "AED",
+                                "BHD",
+                                "KWD",
+                                "OMR"
+                              ],
+                              "example": "SAR",
+                              "default": "SAR"
+                            }
+                          }
+                        },
+                        "discount_amount": {
+                          "type": "object",
+                          "properties": {
+                            "amount": {
+                              "type": "number",
+                              "example": 100,
+                              "minimum": 0
+                            },
+                            "currency": {
+                              "type": "string",
+                              "enum": [
+                                "SAR",
+                                "AED",
+                                "BHD",
+                                "KWD",
+                                "OMR"
+                              ],
+                              "example": "SAR",
+                              "default": "SAR"
+                            }
+                          }
+                        },
+                        "total_amount": {
+                          "type": "object",
+                          "properties": {
+                            "amount": {
+                              "type": "string",
+                              "example": 100,
+                              "default": 100
+                            },
+                            "currency": {
+                              "type": "string",
+                              "enum": [
+                                "SAR",
+                                "AED",
+                                "BHD",
+                                "KWD",
+                                "OMR"
+                              ],
+                              "example": "SAR",
+                              "default": "SAR"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "default": [
+                      {
+                        "name": "Lego City 8601",
+                        "type": "Digital",
+                        "reference_id": "123",
+                        "sku": "SA-12436",
+                        "quantity": 1,
+                        "discount_amount": {
+                          "amount": 100,
+                          "currency": "SAR"
+                        },
+                        "tax_amount": {
+                          "amount": 10,
+                          "currency": "SAR"
+                        },
+                        "unit_price": {
+                          "amount": 490,
+                          "currency": "SAR"
+                        },
+                        "total_amount": {
+                          "amount": 100,
+                          "currency": "SAR"
+                        }
+                      }
+                    ]
+                  },
+                  "consumer": {
+                    "type": "object",
+                    "description": "The customer's identifying details.",
+                    "required": [
+                      "first_name",
+                      "last_name",
+                      "phone_number"
+                    ],
+                    "properties": {
+                      "email": {
+                        "type": "string",
+                        "format": "email",
+                        "example": "customer@email.com",
+                        "default": "customer@email.com"
+                      },
+                      "first_name": {
+                        "type": "string",
+                        "example": "Mona",
+                        "default": "Mona"
+                      },
+                      "last_name": {
+                        "type": "string",
+                        "example": "Lisa",
+                        "default": "Lisa"
+                      },
+                      "phone_number": {
+                        "type": "string",
+                        "example": "566027755",
+                        "default": "566027755"
+                      }
+                    }
+                  },
+                  "country_code": {
+                    "type": "string",
+                    "description": "The two-character ISO 3166-1 country code",
+                    "enum": [
+                      "SA",
+                      "AE",
+                      "BH",
+                      "KW",
+                      "OM"
+                    ],
+                    "example": "SA",
+                    "default": "SA"
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "The order description.",
+                    "example": "lorem ipsum dolor",
+                    "maximum": 256,
+                    "default": "Enter order description here."
+                  },
+                  "merchant_url": {
+                    "type": "object",
+                    "required": [
+                      "success",
+                      "failure",
+                      "cancel"
+                    ],
+                    "description": "This object includes all the redirect URLs that the customer will be redirected to from the Tamara checkout page in different cases.",
+                    "properties": {
+                      "cancel": {
+                        "type": "string",
+                        "format": "uri",
+                        "example": "http://example.com/#/cancel",
+                        "default": "http://example.com/#/cancel"
+                      },
+                      "failure": {
+                        "type": "string",
+                        "format": "uri",
+                        "example": "http://example.com/#/fail",
+                        "default": "http://example.com/#/fail"
+                      },
+                      "success": {
+                        "type": "string",
+                        "format": "uri",
+                        "example": "http://example.com/#/success",
+                        "default": "http://example.com/#/success"
+                      }
+                    }
+                  },
+                  "billing_address": {
+                    "type": "object",
+                    "description": "The customer's billing address, if any.",
+                    "properties": {
+                      "city": {
+                        "type": "string",
+                        "example": "Riyadh",
+                        "default": "Riyadh"
+                      },
+                      "country_code": {
+                        "type": "string",
+                        "description": "The two-character ISO 3166-1 country code",
+                        "enum": [
+                          "SA",
+                          "AE",
+                          "BH",
+                          "KW",
+                          "OM"
+                        ],
+                        "example": "SA",
+                        "default": "SA"
+                      },
+                      "first_name": {
+                        "type": "string",
+                        "example": "Mona",
+                        "default": "Mona"
+                      },
+                      "last_name": {
+                        "type": "string",
+                        "example": "Lisa",
+                        "default": "Lisa"
+                      },
+                      "line1": {
+                        "type": "string",
+                        "example": "3764 Al Urubah Rd",
+                        "default": "3764 Al Urubah Rd"
+                      },
+                      "line2": {
+                        "type": "string",
+                        "example": "string",
+                        "default": "string"
+                      },
+                      "phone_number": {
+                        "type": "string",
+                        "example": "532298658",
+                        "default": "532298658"
+                      },
+                      "region": {
+                        "type": "string",
+                        "example": "As Sulimaniyah",
+                        "default": "As Sulimaniyah"
+                      }
+                    }
+                  },
+                  "shipping_address": {
+                    "type": "object",
+                    "required": [
+                      "first_name",
+                      "last_name",
+                      "line1",
+                      "city",
+                      "country_code"
+                    ],
+                    "properties": {
+                      "city": {
+                        "type": "string",
+                        "example": "Riyadh",
+                        "default": "Riyadh"
+                      },
+                      "country_code": {
+                        "type": "string",
+                        "description": "The two-character ISO 3166-1 country code",
+                        "enum": [
+                          "SA",
+                          "AE",
+                          "BH",
+                          "KW",
+                          "OM"
+                        ],
+                        "example": "SA",
+                        "default": "SA"
+                      },
+                      "first_name": {
+                        "type": "string",
+                        "example": "Mona",
+                        "default": "Mona"
+                      },
+                      "last_name": {
+                        "type": "string",
+                        "example": "Lisa'",
+                        "default": "Lisa"
+                      },
+                      "line1": {
+                        "type": "string",
+                        "example": "3764 Al Urubah Rd",
+                        "default": "3764 Al Urubah Rd"
+                      },
+                      "line2": {
+                        "type": "string",
+                        "example": "string",
+                        "default": "string"
+                      },
+                      "phone_number": {
+                        "type": "string",
+                        "example": "532298658",
+                        "default": "532298658"
+                      },
+                      "region": {
+                        "type": "string",
+                        "example": "As Sulimaniyah",
+                        "default": "As Sulimaniyah"
+                      }
+                    }
+                  },
+                  "platform": {
+                    "type": "string",
+                    "description": "Mentions the platform where the Tamara order is being initiated from (Mostly used by our e-commerce plugins) but can also be used by direct integrations.",
+                    "example": "Magento, WooCommerce, Salla..etc.",
+                    "default": "platform name here"
+                  },
+                  "is_mobile": {
+                    "type": "boolean",
+                    "description": "To identify mobile users of your store.",
+                    "default": false,
+                    "example": false
+                  },
+                  "locale": {
+                    "type": "string",
+                    "description": "Display language for Tamara checkout page. Language to be defined by the merchant following RFC 1766, e.g en_US or ar_SA. Default is set to Arabic if not passed and customer is new. If customer already exists and locale is not passed then customer's preference will be taken into account.",
+                    "enum": [
+                      "ar_SA",
+                      "en_US"
+                    ],
+                    "default": "ar_SA",
+                    "example": "ar_SA"
+                  },
+                  "risk_assessment": {
+                    "type": "object",
+                    "description": "Risk assessment info from the merchant side",
+                    "properties": {
+                      "customer_age": {
+                        "type": "integer",
+                        "description": "Customer age in Years",
+                        "example": 21,
+                        "default": 21
+                      },
+                      "customer_dob": {
+                        "type": "string",
+                        "description": "Customer Date of Birth (format dd-mm-yyyy)",
+                        "example": "01-12-2000",
+                        "maximum": 10,
+                        "default": "01-12-2000"
+                      },
+                      "customer_gender": {
+                        "type": "string",
+                        "enum": [
+                          "Male",
+                          "Female"
+                        ],
+                        "description": "Customer's gender",
+                        "default": "Female"
+                      },
+                      "customer_nationality": {
+                        "type": "string",
+                        "description": "Customer nationality code (ISO 2 letter)",
+                        "example": "SA or IN or KW",
+                        "default": "SA"
+                      },
+                      "is_premium_customer": {
+                        "type": "boolean",
+                        "description": "Is VIP or any kind of premium customer tiers like Platinum, Gold...etc",
+                        "example": false,
+                        "default": false
+                      },
+                      "is_existing_customer": {
+                        "type": "boolean",
+                        "description": "Customer's account was created in the past, not on the same day as the order is created.",
+                        "example": false,
+                        "default": false
+                      },
+                      "is_guest_user": {
+                        "type": "boolean",
+                        "description": "Is the customer performing guest checkout on your store.",
+                        "example": false,
+                        "default": false
+                      },
+                      "account_creation_date": {
+                        "type": "string",
+                        "description": "Date of customer registration of their account (format dd-mm-yyyy)",
+                        "example": "12-06-2020",
+                        "maximum": 10,
+                        "default": "12-06-2020"
+                      },
+                      "platform_account_creation_date": {
+                        "type": "string",
+                        "description": "Date of customer registration of their account with the platform like Salla (format dd-mm-yyyy)",
+                        "example": "12-06-2020",
+                        "maximum": 10,
+                        "default": "12-06-2020"
+                      },
+                      "date_of_first_transaction": {
+                        "type": "string",
+                        "description": "Date of consumer’s first transaction. (format dd-mm-yyyy)",
+                        "example": "12-06-2020",
+                        "maximum": 10,
+                        "default": "12-06-2020"
+                      },
+                      "is_card_on_file": {
+                        "type": "boolean",
+                        "description": "Does customer have any saved cards on his account?",
+                        "example": true,
+                        "default": false
+                      },
+                      "is_COD_customer": {
+                        "type": "boolean",
+                        "description": "Does customer only use Cash on Delivery as their payment method previously?",
+                        "example": false,
+                        "default": false
+                      },
+                      "has_delivered_order": {
+                        "type": "boolean",
+                        "description": "Does the customer have successfully delivered orders in the past?",
+                        "example": false,
+                        "default": true
+                      },
+                      "is_phone_verified": {
+                        "type": "boolean",
+                        "description": "Is the customer's registered phone verified?",
+                        "example": false,
+                        "default": false
+                      },
+                      "is_fraudulent_customer": {
+                        "type": "boolean",
+                        "description": "Does customer have any history of fraudulent activity in your records like false chargebacks, stolen card usage etc.?",
+                        "example": false,
+                        "default": false
+                      },
+                      "total_ltv": {
+                        "type": "number",
+                        "description": "Lifetime value. The total amount (in local currency) the consumer has ordered, excluding canceled, rejected, or refunded transactions. Also excluding **Tamara** payments.",
+                        "example": 200,
+                        "default": 200
+                      },
+                      "total_order_count": {
+                        "type": "integer",
+                        "description": "Number of orders the customer has made at your store since creating an account, excluding canceled, rejected, or refunded transactions. Also excluding **Tamara** payments.",
+                        "example": 15,
+                        "default": 15
+                      },
+                      "order_amount_last3months": {
+                        "type": "number",
+                        "description": "Amount the consumer spent in the last 3 months, excluding canceled, rejected, or refunded transactions. Also excluding **Tamara** payments.",
+                        "example": 2000,
+                        "default": 2000
+                      },
+                      "order_count_last3months": {
+                        "type": "integer",
+                        "description": "Number of orders the consumer placed in the last 3 months, excluding canceled, rejected, or refunded transactions. Also excluding **Tamara** payments.",
+                        "example": 10,
+                        "default": 10
+                      },
+                      "last_order_date": {
+                        "type": "string",
+                        "description": "Date on which the consumer made their last purchase, excluding **Tamara** payments (format dd-mm-yyyy)",
+                        "example": "12-06-2020",
+                        "maximum": 10,
+                        "default": "12-06-2020"
+                      },
+                      "last_order_amount": {
+                        "type": "number",
+                        "description": "Amount (in local currency) of the last order, excluding **Tamara** payments.",
+                        "example": 2000,
+                        "default": 2000
+                      },
+                      "reward_program_enrolled": {
+                        "type": "boolean",
+                        "description": "Is customer enrolled in any of your reward program?",
+                        "example": false,
+                        "default": false
+                      },
+                      "reward_program_points": {
+                        "type": "number",
+                        "description": "Number of reward points earned by the customer so far.",
+                        "example": 2000,
+                        "default": 2000
+                      }
+                    }
+                  },
+                  "expires_in_minutes": {
+                    "type": "integer",
+                    "description": "Order expiry time in minutes, min 5 minutes, max 1440 (one day). By default this key will be ignored, and default value of 30 mins is used, **Please contact our support team to enable this feature**.",
+                    "example": 30,
+                    "minimum": 5,
+                    "maximum": 1440
+                  },
+                  "additional_data": {
+                    "type": "object",
+                    "description": "Any additional order data information from the merchant side",
+                    "properties": {
+                      "delivery_method": {
+                        "type": "string",
+                        "description": "the delivery method selected by the customer e.g. home delivery, or click and collect",
+                        "example": "Home Delivery",
+                        "default": "Home Delivery"
+                      },
+                      "pickup_store": {
+                        "type": "string",
+                        "description": "the collection point selected by the user if his order is for store collection",
+                        "example": "Store A",
+                        "default": "Store A"
+                      },
+                      "store_code": {
+                        "type": "string",
+                        "description": "The unique store code/name from which request is called",
+                        "example": "Branch A",
+                        "default": "Branch A"
+                      },
+                      "vendor_amount": {
+                        "type": "number",
+                        "description": "The amount to be settled to vendor",
+                        "example": 10,
+                        "default": 0
+                      },
+                      "merchant_settlement_amount": {
+                        "type": "number",
+                        "description": "The amount to be settled to merchant",
+                        "example": 100,
+                        "default": 0
+                      },
+                      "vendor_reference_code": {
+                        "type": "string",
+                        "description": "The vendor identifier",
+                        "example": "AZ1234",
+                        "default": "AZ1234"
+                      }
+                    }
+                  }
+                }
+              },
+              "example": {
+                "total_amount": {
+                  "amount": 300,
+                  "currency": "SAR"
+                },
+                "shipping_amount": {
+                  "amount": 0,
+                  "currency": "SAR"
+                },
+                "tax_amount": {
+                  "amount": 0,
+                  "currency": "SAR"
+                },
+                "order_reference_id": "1231234123-abda-fdfe--afd31241",
+                "order_number": "S12356",
+                "discount": {
+                  "name": "Christmas 2020",
+                  "amount": {
+                    "amount": 200,
+                    "currency": "SAR"
+                  }
+                },
+                "items": [
+                  {
+                    "name": "Lego City 8601",
+                    "type": "Digital",
+                    "reference_id": "123",
+                    "sku": "SA-12436",
+                    "quantity": 1,
+                    "discount_amount": {
+                      "amount": 100,
+                      "currency": "SAR"
+                    },
+                    "tax_amount": {
+                      "amount": 10,
+                      "currency": "SAR"
+                    },
+                    "unit_price": {
+                      "amount": 490,
+                      "currency": "SAR"
+                    },
+                    "total_amount": {
+                      "amount": 100,
+                      "currency": "SAR"
+                    }
+                  }
+                ],
+                "consumer": {
+                  "email": "customer@email.com",
+                  "first_name": "Mona",
+                  "last_name": "Lisa",
+                  "phone_number": "566027755"
+                },
+                "country_code": "SA",
+                "description": "lorem ipsum dolor",
+                "merchant_url": {
+                  "cancel": "http://awesome-qa-tools.s3-website.me-south-1.amazonaws.com/#/cancel",
+                  "failure": "http://awesome-qa-tools.s3-website.me-south-1.amazonaws.com/#/fail",
+                  "success": "http://awesome-qa-tools.s3-website.me-south-1.amazonaws.com/#/success"
+                },
+                "billing_address": {
+                  "city": "Riyadh",
+                  "country_code": "SA",
+                  "first_name": "Mona",
+                  "last_name": "Lisa",
+                  "line1": "3764 Al Urubah Rd",
+                  "line2": "string",
+                  "phone_number": "532298658",
+                  "region": "As Sulimaniyah"
+                },
+                "shipping_address": {
+                  "city": "Riyadh",
+                  "country_code": "SA",
+                  "first_name": "Mona",
+                  "last_name": "Lisa",
+                  "line1": "3764 Al Urubah Rd",
+                  "line2": "string",
+                  "phone_number": "532298658",
+                  "region": "As Sulimaniyah"
+                },
+                "is_mobile": false,
+                "locale": "en_US",
+                "risk_assessment": {
+                  "phone_verified": false,
+                  "customer_age": 22,
+                  "customer_dob": "31-01-2000",
+                  "customer_gender": "Male",
+                  "customer_nationality": "SA",
+                  "is_premium_customer": true,
+                  "is_existing_customer": true,
+                  "is_guest_user": true,
+                  "account_creation_date": "31-01-2019",
+                  "platform_account_creation_date": "string",
+                  "date_of_first_transaction": "31-01-2019",
+                  "is_card_on_file": true,
+                  "is_COD_customer": true,
+                  "has_delivered_order": true,
+                  "is_phone_verified": true,
+                  "is_fraudulent_customer": true,
+                  "total_ltv": 501.5,
+                  "total_order_count": 12,
+                  "order_amount_last3months": 301.5,
+                  "order_count_last3months": 2,
+                  "last_order_date": "31-01-2021",
+                  "last_order_amount": 301.5,
+                  "reward_program_enrolled": true,
+                  "reward_program_points": 300
+                },
+                "additional_data": {
+                  "delivery_method": "home delivery",
+                  "pickup_store": "Store A",
+                  "store_code": "Store code A",
+                  "vendor_amount": 0,
+                  "merchant_settlement_amount": 0,
+                  "vendor_reference_code": "AZ1234"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Checkout Session Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "checkout_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "order_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "checkout_url": {
+                      "type": "string"
+                    }
+                  },
+                  "x-readme-ref-name": "checkout"
+                },
+                "examples": {
+                  "Success": {
+                    "value": {
+                      "order_id": "f56a3123-9e23-45e4-87a2-95366d3b0bca",
+                      "checkout_id": "5ccbe4b1-890d-40b3-8a88-0b489ba8ed01",
+                      "checkout_url": "https://checkout.tamara.co/checkout/5ccbe4b1-890d-40b3-8a88-0b489ba8ed01?locale=en_US&orderId=f56a3123-9e23-45e4-87a2-95366d3b0bca",
+                      "status": "new"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsupported Country/Currency",
+            "content": {
+              "application/json": {
+                "example": {
+                  "message": "Unsupported country-currency combination. Please reach out to your account manager for support",
+                  "errors": [
+                    {
+                      "error_code": "not_supported_country_currency"
+                    }
+                  ],
+                  "data": {},
+                  "title": null,
+                  "screen_type": null
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orders/{order_id}": {
+      "get": {
+        "tags": [
+          "Post-Checkout"
+        ],
+        "summary": "Get Order Details by Tamara's order_id",
+        "description": "Fetch all the order details available on **Tamara's** side using the unique `order_id` that is issued by **Tamara** for every order whether online or in-store.",
+        "operationId": "getOrderDetails",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "Status `\"new\"`": {
+                    "value": {
+                      "order_id": "0ac038ef-de4a-491c-828e-b02ec0d4582d",
+                      "order_reference_id": "1231234123",
+                      "order_number": "1231234123",
+                      "description": "lorem ipsum dolor lorem ipsum dolor lorem ipsum dolor",
+                      "consumer": {
+                        "first_name": "Mona",
+                        "last_name": "Lisa",
+                        "email": "customer@email.com",
+                        "phone_number": "966532298658",
+                        "national_id": "",
+                        "date_of_birth": "2023-07-10T00:00:00.000Z",
+                        "is_first_order": null
+                      },
+                      "status": "new",
+                      "shipping_address": {
+                        "first_name": "Mona",
+                        "last_name": "Lisa",
+                        "line1": "3764 Al Urubah Rd",
+                        "line2": "string",
+                        "region": "As Sulimaniyah",
+                        "postal_code": "",
+                        "city": "Riyadh",
+                        "country_code": "SA",
+                        "phone_number": "966532298658"
+                      },
+                      "billing_address": {
+                        "first_name": "Mona",
+                        "last_name": "Lisa",
+                        "line1": "3764 Al Urubah Rd",
+                        "line2": "string",
+                        "region": "As Sulimaniyah",
+                        "postal_code": "",
+                        "city": "Riyadh",
+                        "country_code": "SA",
+                        "phone_number": "966532298658"
+                      },
+                      "items": [
+                        {
+                          "reference_id": "123",
+                          "type": "Digital",
+                          "name": "Lego City 8601",
+                          "sku": "SA-12436",
+                          "quantity": 1,
+                          "tax_amount": {
+                            "amount": 10,
+                            "currency": "SAR"
+                          },
+                          "total_amount": {
+                            "amount": 100,
+                            "currency": "SAR"
+                          },
+                          "unit_price": {
+                            "amount": 490,
+                            "currency": "SAR"
+                          },
+                          "discount_amount": {
+                            "amount": 100,
+                            "currency": "SAR"
+                          },
+                          "image_url": "",
+                          "item_url": ""
+                        }
+                      ],
+                      "payment_type": "PAY_BY_INSTALMENTS",
+                      "instalments": 3,
+                      "total_amount": {
+                        "amount": 300,
+                        "currency": "SAR"
+                      },
+                      "shipping_amount": {
+                        "amount": 0,
+                        "currency": "SAR"
+                      },
+                      "tax_amount": {
+                        "amount": 0,
+                        "currency": "SAR"
+                      },
+                      "discount_amount": {
+                        "name": "Christmas 2020",
+                        "amount": {
+                          "amount": 200,
+                          "currency": "SAR"
+                        }
+                      },
+                      "captured_amount": {
+                        "amount": 0,
+                        "currency": "SAR"
+                      },
+                      "refunded_amount": {
+                        "amount": 0,
+                        "currency": "SAR"
+                      },
+                      "canceled_amount": {
+                        "amount": 0,
+                        "currency": "SAR"
+                      },
+                      "paid_amount": {
+                        "amount": 0,
+                        "currency": "SAR"
+                      },
+                      "settlement_status": "",
+                      "settlement_date": null,
+                      "created_at": "2023-07-10T08:05:59.000Z",
+                      "wallet_prepaid_amount": {
+                        "amount": 0,
+                        "currency": "SAR"
+                      },
+                      "transactions": {
+                        "cancels": [],
+                        "captures": [],
+                        "refunds": []
+                      },
+                      "processing": false,
+                      "store_code": "",
+                      "additional_data": {
+                        "single_checkout": false,
+                        "from_in_store_payment_link": false
+                      }
+                    }
+                  },
+                  "Status `\"fully_captured\"`": {
+                    "value": {
+                      "order_id": "0ac038ef-de4a-491c-828e-b02ec0d4582d",
+                      "order_reference_id": "1231234123",
+                      "order_number": "1231234123",
+                      "description": "lorem ipsum dolor lorem ipsum dolor lorem ipsum dolor",
+                      "consumer": {
+                        "first_name": "Mona",
+                        "last_name": "Lisa",
+                        "email": "customer@email.com",
+                        "phone_number": "966532298658",
+                        "national_id": "",
+                        "date_of_birth": "2023-06-22T00:00:00.000Z",
+                        "is_first_order": null
+                      },
+                      "status": "fully_captured",
+                      "shipping_address": {
+                        "first_name": "Mona",
+                        "last_name": "Lisa",
+                        "line1": "3764 Al Urubah Rd",
+                        "line2": "string",
+                        "region": "As Sulimaniyah",
+                        "postal_code": "",
+                        "city": "Riyadh",
+                        "country_code": "SA",
+                        "phone_number": "966532298658"
+                      },
+                      "billing_address": {
+                        "first_name": "Mona",
+                        "last_name": "Lisa",
+                        "line1": "3764 Al Urubah Rd",
+                        "line2": "string",
+                        "region": "As Sulimaniyah",
+                        "postal_code": "",
+                        "city": "Riyadh",
+                        "country_code": "SA",
+                        "phone_number": "966532298658"
+                      },
+                      "items": [
+                        {
+                          "reference_id": "123",
+                          "type": "Digital",
+                          "name": "Lego City 8601",
+                          "sku": "SA-12436",
+                          "quantity": 1,
+                          "tax_amount": {
+                            "amount": 10,
+                            "currency": "SAR"
+                          },
+                          "total_amount": {
+                            "amount": 100,
+                            "currency": "SAR"
+                          },
+                          "unit_price": {
+                            "amount": 490,
+                            "currency": "SAR"
+                          },
+                          "discount_amount": {
+                            "amount": 100,
+                            "currency": "SAR"
+                          },
+                          "image_url": "",
+                          "item_url": ""
+                        }
+                      ],
+                      "payment_type": "PAY_BY_INSTALMENTS",
+                      "instalments": 3,
+                      "total_amount": {
+                        "amount": 300,
+                        "currency": "SAR"
+                      },
+                      "shipping_amount": {
+                        "amount": 0,
+                        "currency": "SAR"
+                      },
+                      "tax_amount": {
+                        "amount": 0,
+                        "currency": "SAR"
+                      },
+                      "discount_amount": {
+                        "name": "Christmas 2020",
+                        "amount": {
+                          "amount": 200,
+                          "currency": "SAR"
+                        }
+                      },
+                      "captured_amount": {
+                        "amount": 300,
+                        "currency": "SAR"
+                      },
+                      "refunded_amount": {
+                        "amount": 0,
+                        "currency": "SAR"
+                      },
+                      "canceled_amount": {
+                        "amount": 0,
+                        "currency": "SAR"
+                      },
+                      "paid_amount": {
+                        "amount": 100,
+                        "currency": "SAR"
+                      },
+                      "settlement_status": "",
+                      "settlement_date": null,
+                      "created_at": "2023-06-22T10:21:22.000Z",
+                      "wallet_prepaid_amount": {
+                        "amount": 0,
+                        "currency": "SAR"
+                      },
+                      "transactions": {
+                        "cancels": [],
+                        "captures": [
+                          {
+                            "capture_id": "d5a4be96-30de-4df1-a93f-43bb7b85a60a",
+                            "order_id": "4187f2ee-4b5e-40b7-8244-9cb7d5e54674",
+                            "merchant_id": "6d9f752e-0bbc-47eb-bcf7-be13adf6f04d",
+                            "total_amount": {
+                              "amount": 300,
+                              "currency": "SAR"
+                            },
+                            "refunded_amount": {
+                              "amount": 0,
+                              "currency": "SAR"
+                            },
+                            "shipping_info": {
+                              "shipped_at": "2023-06-22T00:00:00.000Z",
+                              "shipping_company": "N/A",
+                              "tracking_number": null,
+                              "tracking_url": null
+                            },
+                            "items": [],
+                            "shipping_amount": {
+                              "amount": 0,
+                              "currency": "SAR"
+                            },
+                            "tax_amount": {
+                              "amount": 0,
+                              "currency": "SAR"
+                            },
+                            "discount_amount": {
+                              "amount": 200,
+                              "currency": "SAR"
+                            },
+                            "created_at": "2023-07-10T08:08:52.000Z"
+                          }
+                        ],
+                        "refunds": []
+                      },
+                      "processing": false,
+                      "store_code": "",
+                      "additional_data": {
+                        "single_checkout": false,
+                        "from_in_store_payment_link": false
+                      }
+                    }
+                  },
+                  "Status `\"fully_refunded\"`": {
+                    "value": {
+                      "order_id": "0ac038ef-de4a-491c-828e-b02ec0d4582d",
+                      "order_reference_id": "1231234123",
+                      "order_number": "1231234123",
+                      "description": "lorem ipsum dolor lorem ipsum dolor lorem ipsum dolor",
+                      "consumer": {
+                        "first_name": "Mona",
+                        "last_name": "Lisa",
+                        "email": "customer@email.com",
+                        "phone_number": "966532298658",
+                        "national_id": "",
+                        "date_of_birth": "2023-06-22T00:00:00.000Z",
+                        "is_first_order": null
+                      },
+                      "status": "fully_refunded",
+                      "shipping_address": {
+                        "first_name": "Mona",
+                        "last_name": "Lisa",
+                        "line1": "3764 Al Urubah Rd",
+                        "line2": "string",
+                        "region": "As Sulimaniyah",
+                        "postal_code": "",
+                        "city": "Riyadh",
+                        "country_code": "SA",
+                        "phone_number": "966532298658"
+                      },
+                      "billing_address": {
+                        "first_name": "Mona",
+                        "last_name": "Lisa",
+                        "line1": "3764 Al Urubah Rd",
+                        "line2": "string",
+                        "region": "As Sulimaniyah",
+                        "postal_code": "",
+                        "city": "Riyadh",
+                        "country_code": "SA",
+                        "phone_number": "966532298658"
+                      },
+                      "items": [
+                        {
+                          "reference_id": "123",
+                          "type": "Digital",
+                          "name": "Lego City 8601",
+                          "sku": "SA-12436",
+                          "quantity": 1,
+                          "tax_amount": {
+                            "amount": 10,
+                            "currency": "SAR"
+                          },
+                          "total_amount": {
+                            "amount": 100,
+                            "currency": "SAR"
+                          },
+                          "unit_price": {
+                            "amount": 490,
+                            "currency": "SAR"
+                          },
+                          "discount_amount": {
+                            "amount": 100,
+                            "currency": "SAR"
+                          },
+                          "image_url": "",
+                          "item_url": ""
+                        }
+                      ],
+                      "payment_type": "PAY_BY_INSTALMENTS",
+                      "instalments": 3,
+                      "total_amount": {
+                        "amount": 300,
+                        "currency": "SAR"
+                      },
+                      "shipping_amount": {
+                        "amount": 0,
+                        "currency": "SAR"
+                      },
+                      "tax_amount": {
+                        "amount": 0,
+                        "currency": "SAR"
+                      },
+                      "discount_amount": {
+                        "name": "Christmas 2020",
+                        "amount": {
+                          "amount": 200,
+                          "currency": "SAR"
+                        }
+                      },
+                      "captured_amount": {
+                        "amount": 300,
+                        "currency": "SAR"
+                      },
+                      "refunded_amount": {
+                        "amount": 300,
+                        "currency": "SAR"
+                      },
+                      "canceled_amount": {
+                        "amount": 0,
+                        "currency": "SAR"
+                      },
+                      "paid_amount": {
+                        "amount": 100,
+                        "currency": "SAR"
+                      },
+                      "settlement_status": "",
+                      "settlement_date": null,
+                      "created_at": "2023-06-22T10:21:22.000Z",
+                      "wallet_prepaid_amount": {
+                        "amount": 0,
+                        "currency": "SAR"
+                      },
+                      "transactions": {
+                        "cancels": [],
+                        "captures": [
+                          {
+                            "capture_id": "d5a4be96-30de-4df1-a93f-43bb7b85a60a",
+                            "order_id": "4187f2ee-4b5e-40b7-8244-9cb7d5e54674",
+                            "merchant_id": "6d9f752e-0bbc-47eb-bcf7-be13adf6f04d",
+                            "total_amount": {
+                              "amount": 300,
+                              "currency": "SAR"
+                            },
+                            "refunded_amount": {
+                              "amount": 0,
+                              "currency": "SAR"
+                            },
+                            "shipping_info": {
+                              "shipped_at": "2023-06-22T00:00:00.000Z",
+                              "shipping_company": "N/A",
+                              "tracking_number": null,
+                              "tracking_url": null
+                            },
+                            "items": [],
+                            "shipping_amount": {
+                              "amount": 0,
+                              "currency": "SAR"
+                            },
+                            "tax_amount": {
+                              "amount": 0,
+                              "currency": "SAR"
+                            },
+                            "discount_amount": {
+                              "amount": 200,
+                              "currency": "SAR"
+                            },
+                            "created_at": "2023-07-10T08:08:52.000Z"
+                          }
+                        ],
+                        "refunds": [
+                          {
+                            "refund_id": "ae81b5a7-0792-4c4e-b351-430cbcdf00ec",
+                            "capture_id": "d5a4be96-30de-4df1-a93f-43bb7b85a60a",
+                            "total_amount": {
+                              "amount": 300,
+                              "currency": "SAR"
+                            },
+                            "items": [],
+                            "tax_amount": {
+                              "amount": 0,
+                              "currency": "SAR"
+                            },
+                            "shipping_amount": {
+                              "amount": 0,
+                              "currency": "SAR"
+                            },
+                            "discount_amount": {
+                              "amount": 200,
+                              "currency": "SAR"
+                            },
+                            "created_at": "2023-07-10T08:08:52.000Z",
+                            "updated_at": "2023-07-10T08:08:52.000Z",
+                            "comment": "",
+                            "ext_data": [],
+                            "merchant_refund_id": null,
+                            "refund_status": "success"
+                          }
+                        ]
+                      },
+                      "processing": false,
+                      "store_code": "",
+                      "additional_data": {
+                        "single_checkout": false,
+                        "from_in_store_payment_link": false
+                      }
+                    }
+                  },
+                  "Status `\"canceled\"`": {
+                    "value": {
+                      "order_id": "0ac038ef-de4a-491c-828e-b02ec0d4582d",
+                      "order_reference_id": "1231234123",
+                      "order_number": "1231234123",
+                      "description": "lorem ipsum dolor lorem ipsum dolor lorem ipsum dolor",
+                      "consumer": {
+                        "first_name": "Mona",
+                        "last_name": "Lisa",
+                        "email": "5288070957chientest@mailinator.com",
+                        "phone_number": "966566027755",
+                        "national_id": "",
+                        "date_of_birth": "2023-07-10T00:00:00.000Z",
+                        "is_first_order": null
+                      },
+                      "status": "canceled",
+                      "shipping_address": {
+                        "first_name": "Mona",
+                        "last_name": "Lisa",
+                        "line1": "3764 Al Urubah Rd",
+                        "line2": "string",
+                        "region": "As Sulimaniyah",
+                        "postal_code": "",
+                        "city": "Riyadh",
+                        "country_code": "SA",
+                        "phone_number": "966532298658"
+                      },
+                      "billing_address": {
+                        "first_name": "Mona",
+                        "last_name": "Lisa",
+                        "line1": "3764 Al Urubah Rd",
+                        "line2": "string",
+                        "region": "As Sulimaniyah",
+                        "postal_code": "",
+                        "city": "Riyadh",
+                        "country_code": "SA",
+                        "phone_number": "966532298658"
+                      },
+                      "items": [
+                        {
+                          "reference_id": "123",
+                          "type": "Digital",
+                          "name": "Lego City 8601",
+                          "sku": "SA-12436",
+                          "quantity": 1,
+                          "tax_amount": {
+                            "amount": 10,
+                            "currency": "SAR"
+                          },
+                          "total_amount": {
+                            "amount": 100,
+                            "currency": "SAR"
+                          },
+                          "unit_price": {
+                            "amount": 490,
+                            "currency": "SAR"
+                          },
+                          "discount_amount": {
+                            "amount": 100,
+                            "currency": "SAR"
+                          },
+                          "image_url": "",
+                          "item_url": ""
+                        }
+                      ],
+                      "payment_type": "PAY_BY_INSTALMENTS",
+                      "instalments": 3,
+                      "total_amount": {
+                        "amount": 300,
+                        "currency": "SAR"
+                      },
+                      "shipping_amount": {
+                        "amount": 0,
+                        "currency": "SAR"
+                      },
+                      "tax_amount": {
+                        "amount": 0,
+                        "currency": "SAR"
+                      },
+                      "discount_amount": {
+                        "name": "Christmas 2020",
+                        "amount": {
+                          "amount": 200,
+                          "currency": "SAR"
+                        }
+                      },
+                      "captured_amount": {
+                        "amount": 0,
+                        "currency": "SAR"
+                      },
+                      "refunded_amount": {
+                        "amount": 0,
+                        "currency": "SAR"
+                      },
+                      "canceled_amount": {
+                        "amount": 300,
+                        "currency": "SAR"
+                      },
+                      "paid_amount": {
+                        "amount": 100,
+                        "currency": "SAR"
+                      },
+                      "settlement_status": "",
+                      "settlement_date": null,
+                      "created_at": "2023-07-10T08:05:59.000Z",
+                      "wallet_prepaid_amount": {
+                        "amount": 0,
+                        "currency": "SAR"
+                      },
+                      "transactions": {
+                        "cancels": [
+                          {
+                            "cancel_id": "eed8e906-8373-46b8-a250-647ccf4baeca",
+                            "order_id": "a368d32c-d3ba-4096-8d10-779bf077d6cb",
+                            "total_amount": {
+                              "amount": 300,
+                              "currency": "SAR"
+                            },
+                            "items": [
+                              {
+                                "reference_id": "123",
+                                "type": "Digital",
+                                "name": "Lego City 8601",
+                                "sku": "SA-12436",
+                                "quantity": 1,
+                                "tax_amount": {
+                                  "amount": 0,
+                                  "currency": "SAR"
+                                },
+                                "total_amount": {
+                                  "amount": 1500,
+                                  "currency": "SAR"
+                                },
+                                "unit_price": {
+                                  "amount": 1500,
+                                  "currency": "SAR"
+                                },
+                                "discount_amount": {
+                                  "amount": 0,
+                                  "currency": "SAR"
+                                },
+                                "image_url": "",
+                                "item_url": ""
+                              },
+                              {
+                                "reference_id": "456",
+                                "type": "Digital",
+                                "name": "Lego City 8602",
+                                "sku": "SA-12436",
+                                "quantity": 1,
+                                "tax_amount": {
+                                  "amount": 0,
+                                  "currency": "SAR"
+                                },
+                                "total_amount": {
+                                  "amount": 1500,
+                                  "currency": "SAR"
+                                },
+                                "unit_price": {
+                                  "amount": 1500,
+                                  "currency": "SAR"
+                                },
+                                "discount_amount": {
+                                  "amount": 0,
+                                  "currency": "SAR"
+                                },
+                                "image_url": "",
+                                "item_url": ""
+                              }
+                            ],
+                            "created_at": "2023-07-10T08:12:38.000Z"
+                          }
+                        ],
+                        "captures": [],
+                        "refunds": []
+                      },
+                      "processing": false,
+                      "store_code": "",
+                      "additional_data": {
+                        "single_checkout": false,
+                        "from_in_store_payment_link": false
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "parameters": [
+        {
+          "name": "order_id",
+          "in": "path",
+          "required": true,
+          "description": "Unique Tamara `order_id` from the response of the creation of the checkout session whether online or in-store.",
+          "schema": {
+            "type": "string",
+            "format": "uuid",
+            "example": "ff776045-513b-4cd7-8b4f-e60673daad84",
+            "default": "ff776045-513b-4cd7-8b4f-e60673daad84"
+          }
+        }
+      ]
+    },
+    "/orders/{order_id}/authorise": {
+      "post": {
+        "tags": [
+          "Online Checkout"
+        ],
+        "summary": "Authorise Order",
+        "description": "This endpoint plays a crucial role in the online checkout flow and should be executed upon receipt of the `approved` status webook event from **Tamara**. Its primary function is to update the order status to `authorised` ensuring status synchronization and smooth progression of the online order flow.",
+        "operationId": "authoriseOrder",
+        "responses": {
+          "200": {
+            "description": "Authorisation Successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "order_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "order_expiry_time": {
+                      "type": "string"
+                    },
+                    "payment_type": {
+                      "type": "string",
+                      "enum": [
+                        "PAY_BY_INSTALMENTS",
+                        "PAY_NOW"
+                      ]
+                    },
+                    "auto_captured": {
+                      "type": "boolean"
+                    },
+                    "authorized_amount": {
+                      "type": "array",
+                      "items": {
+                        "properties": {
+                          "amount": {
+                            "type": "number"
+                          },
+                          "currency": {
+                            "type": "string",
+                            "enum": [
+                              "SAR",
+                              "AED",
+                              "KWD",
+                              "BHD",
+                              "OMR"
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "capture_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  },
+                  "x-readme-ref-name": "authorise"
+                },
+                "examples": {
+                  "Success": {
+                    "value": {
+                      "order_id": "0ac038ef-de4a-491c-828e-b02ec0d4582d",
+                      "status": "authorised",
+                      "order_expiry_time": "2023-06-04T15:07:47.000Z",
+                      "payment_type": "PAY_BY_INSTALMENTS",
+                      "auto_captured": false,
+                      "authorized_amount": {
+                        "amount": 300,
+                        "currency": "SAR"
+                      },
+                      "capture_id": ""
+                    }
+                  },
+                  "Success - Auto Capture Enabled": {
+                    "value": {
+                      "order_id": "0ac038ef-de4a-491c-828e-b02ec0d4582d",
+                      "status": "fully_captured",
+                      "order_expiry_time": "2023-07-04T12:07:43.000Z",
+                      "payment_type": "PAY_BY_INSTALMENTS",
+                      "auto_captured": true,
+                      "authorized_amount": {
+                        "amount": 300,
+                        "currency": "SAR"
+                      },
+                      "capture_id": "bd10fc2c-4db8-426e-a1fd-b16388d42c01"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "parameters": [
+        {
+          "name": "order_id",
+          "in": "path",
+          "required": true,
+          "description": "Unique Tamara `order_id`, obtained from the response of create checkout/in-store checkout session endpoint.",
+          "schema": {
+            "type": "string",
+            "format": "uuid",
+            "example": "ff776045-513b-4cd7-8b4f-e60673daad84",
+            "default": "ff776045-513b-4cd7-8b4f-e60673daad84"
+          }
+        }
+      ]
+    },
+    "/payments/capture": {
+      "post": {
+        "tags": [
+          "Online Checkout"
+        ],
+        "summary": "Capture Order",
+        "description": "This endpoint is requested to perform a full or partial capture of the order, confirming the fulfillment or shipment of the items to the customer. The order status value will be `fully_captured` or `partially_captured` based on the total amount value sent in the request.",
+        "operationId": "captureOrder",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "order_id",
+                  "total_amount",
+                  "shipping_info"
+                ],
+                "properties": {
+                  "order_id": {
+                    "type": "string",
+                    "description": "Unique Tamara `order_id`, obtained from the response of create checkout/in-store checkout session endpoint.",
+                    "format": "uuid",
+                    "example": "8fe4cce9-d0aa-4020-a863-c708547795e9",
+                    "default": "8fe4cce9-d0aa-4020-a863-c708547795e9"
+                  },
+                  "total_amount": {
+                    "type": "object",
+                    "description": "Total amount to be captured out of the original order total.",
+                    "properties": {
+                      "amount": {
+                        "type": "number",
+                        "example": 300,
+                        "default": 300
+                      },
+                      "currency": {
+                        "type": "string",
+                        "enum": [
+                          "SAR",
+                          "AED",
+                          "BHD",
+                          "KWD",
+                          "OMR"
+                        ],
+                        "example": "SAR",
+                        "default": "SAR"
+                      }
+                    }
+                  },
+                  "shipping_info": {
+                    "type": "object",
+                    "required": [
+                      "shipped_at",
+                      "shipping_company"
+                    ],
+                    "properties": {
+                      "shipped_at": {
+                        "type": "string",
+                        "description": "<date-time>",
+                        "example": "2020-03-31T19:19:52.677Z",
+                        "default": "2020-03-31T19:19:52.677Z"
+                      },
+                      "shipping_company": {
+                        "type": "string",
+                        "description": "Name of the shipping company. Limited to 100 characters.",
+                        "example": "DHL, Aramex, SMSA",
+                        "maximum": 100,
+                        "default": "DHL"
+                      },
+                      "tracking_number": {
+                        "type": "string",
+                        "description": "Tracking number of shipment. Limited to 100 characters.",
+                        "example": "123456",
+                        "maximum": 100,
+                        "default": "100"
+                      },
+                      "tracking_url": {
+                        "type": "string",
+                        "description": "URL where the customer can track their shipment. `<=1024 characters`.",
+                        "format": "uri",
+                        "example": "https://shipping.com/tracking?id=123456",
+                        "default": "https://shipping.com/tracking?id=123456",
+                        "maximum": 1024
+                      }
+                    }
+                  },
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "reference_id",
+                        "type",
+                        "name",
+                        "sku",
+                        "quantity",
+                        "total_amount"
+                      ],
+                      "description": "An array of objects to detail the items in this order as seperate objects for each item.",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "description": "Product name. `<=255 characters`.",
+                          "example": "Lego City 8601",
+                          "maximum": 255
+                        },
+                        "quantity": {
+                          "type": "number",
+                          "description": "The quantity being fulfilled for this specific item.",
+                          "example": 1
+                        },
+                        "reference_id": {
+                          "type": "string",
+                          "description": "The unique id of the item from merchant's side",
+                          "example": "123"
+                        },
+                        "sku": {
+                          "type": "string",
+                          "description": "Product SKU. **`<= 128 characters`**",
+                          "example": "SA-12436",
+                          "maximum": 128
+                        },
+                        "item_url": {
+                          "type": "string",
+                          "description": "URL of the item from merchant's website. **`<= 1024 characters`**",
+                          "format": "uri",
+                          "example": "SA-12436",
+                          "maximum": 1024
+                        },
+                        "image_url": {
+                          "type": "string",
+                          "description": "URL to an image of the product that can be later displayed to the customer. **`<= 1024 characters`** <br /> **Size** = 2-3 MB maximum <br /> **Resolution** WxH = 1024xY (the Y height of image should be small).",
+                          "format": "uri",
+                          "example": "SA-12436",
+                          "maximum": 1024
+                        },
+                        "unit_price": {
+                          "type": "object",
+                          "properties": {
+                            "amount": {
+                              "type": "number",
+                              "example": 490
+                            },
+                            "currency": {
+                              "type": "string",
+                              "enum": [
+                                "SAR",
+                                "AED",
+                                "BHD",
+                                "KWD",
+                                "OMR"
+                              ],
+                              "example": "SAR"
+                            }
+                          }
+                        },
+                        "tax_amount": {
+                          "type": "object",
+                          "properties": {
+                            "amount": {
+                              "type": "number",
+                              "example": 10,
+                              "minimum": 0
+                            },
+                            "currency": {
+                              "type": "string",
+                              "enum": [
+                                "SAR",
+                                "AED",
+                                "BHD",
+                                "KWD",
+                                "OMR"
+                              ],
+                              "example": "SAR"
+                            }
+                          }
+                        },
+                        "discount_amount": {
+                          "type": "object",
+                          "properties": {
+                            "amount": {
+                              "type": "number",
+                              "example": 100
+                            },
+                            "currency": {
+                              "type": "string",
+                              "enum": [
+                                "SAR",
+                                "AED",
+                                "BHD",
+                                "KWD",
+                                "OMR"
+                              ],
+                              "example": "SAR"
+                            }
+                          }
+                        },
+                        "total_amount": {
+                          "type": "object",
+                          "properties": {
+                            "amount": {
+                              "type": "string",
+                              "example": "100"
+                            },
+                            "currency": {
+                              "type": "string",
+                              "enum": [
+                                "SAR",
+                                "AED",
+                                "BHD",
+                                "KWD",
+                                "OMR"
+                              ],
+                              "example": "SAR"
+                            }
+                          }
+                        },
+                        "type": {
+                          "type": "string",
+                          "example": "Digital"
+                        }
+                      }
+                    },
+                    "default": [
+                      {
+                        "name": "Lego City 8601",
+                        "type": "Digital",
+                        "reference_id": "123",
+                        "sku": "SA-12436",
+                        "quantity": 1,
+                        "discount_amount": {
+                          "amount": 100,
+                          "currency": "SAR"
+                        },
+                        "tax_amount": {
+                          "amount": 10,
+                          "currency": "SAR"
+                        },
+                        "unit_price": {
+                          "amount": 490,
+                          "currency": "SAR"
+                        },
+                        "total_amount": {
+                          "amount": 100,
+                          "currency": "SAR"
+                        }
+                      }
+                    ]
+                  },
+                  "discount_amount": {
+                    "type": "object",
+                    "properties": {
+                      "amount": {
+                        "type": "string",
+                        "example": 0,
+                        "default": 0
+                      },
+                      "currency": {
+                        "type": "string",
+                        "enum": [
+                          "SAR",
+                          "AED",
+                          "BHD",
+                          "KWD",
+                          "OMR"
+                        ],
+                        "example": "SAR",
+                        "default": "SAR"
+                      }
+                    }
+                  },
+                  "shipping_amount": {
+                    "type": "object",
+                    "description": "Total amount for the shipping of the order.",
+                    "properties": {
+                      "amount": {
+                        "type": "number",
+                        "minimum": 0,
+                        "example": 0,
+                        "default": 0
+                      },
+                      "currency": {
+                        "type": "string",
+                        "enum": [
+                          "SAR",
+                          "AED",
+                          "BHD",
+                          "KWD",
+                          "OMR"
+                        ],
+                        "example": "SAR",
+                        "default": "SAR"
+                      }
+                    }
+                  },
+                  "tax_amount": {
+                    "type": "object",
+                    "description": "Total amount of taxes, if additionally applied.",
+                    "properties": {
+                      "amount": {
+                        "type": "number",
+                        "example": 300,
+                        "minimum": 0,
+                        "default": 100
+                      },
+                      "currency": {
+                        "type": "string",
+                        "enum": [
+                          "SAR",
+                          "AED",
+                          "BHD",
+                          "KWD",
+                          "OMR"
+                        ],
+                        "example": "SAR",
+                        "default": "SAR"
+                      }
+                    }
+                  }
+                }
+              },
+              "example": {
+                "discount_amount": {
+                  "amount": "00.00",
+                  "currency": "SAR"
+                },
+                "items": [
+                  {
+                    "name": "Lego City 8601",
+                    "type": "Digital",
+                    "reference_id": "123",
+                    "sku": "SA-12436",
+                    "quantity": 1,
+                    "discount_amount": {
+                      "amount": 100,
+                      "currency": "SAR"
+                    },
+                    "tax_amount": {
+                      "amount": 10,
+                      "currency": "SAR"
+                    },
+                    "unit_price": {
+                      "amount": 490,
+                      "currency": "SAR"
+                    },
+                    "total_amount": {
+                      "amount": 100,
+                      "currency": "SAR"
+                    }
+                  }
+                ],
+                "order_id": "8fe4cce9-d0aa-4020-a863-c708547795e9",
+                "shipping_amount": {
+                  "amount": "00.00",
+                  "currency": "SAR"
+                },
+                "shipping_info": {
+                  "shipped_at": "2020-03-31T19:19:52.677Z",
+                  "shipping_company": "DHL",
+                  "tracking_number": "123456",
+                  "tracking_url": "https://shipping.com/tracking?id=123456"
+                },
+                "tax_amount": {
+                  "amount": "0.00",
+                  "currency": "SAR"
+                },
+                "total_amount": {
+                  "amount": "100.00",
+                  "currency": "SAR"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Capture Successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "capture_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "order_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "fully_captured",
+                        "partially_captured"
+                      ]
+                    },
+                    "captured_amount": {
+                      "items": {
+                        "properties": {
+                          "amount": {
+                            "type": "number"
+                          },
+                          "currency": {
+                            "type": "string",
+                            "enum": [
+                              "SAR",
+                              "AED",
+                              "KWD",
+                              "BHD",
+                              "OMR"
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "x-readme-ref-name": "capture"
+                },
+                "examples": {
+                  "Fully Captured": {
+                    "value": {
+                      "capture_id": "bd10fc2c-4db8-426e-a1fd-b16388d42c01",
+                      "order_id": "0ac038ef-de4a-491c-828e-b02ec0d4582d",
+                      "status": "fully_captured",
+                      "captured_amount": {
+                        "amount": 300,
+                        "currency": "SAR"
+                      }
+                    }
+                  },
+                  "Partially Captured": {
+                    "value": {
+                      "capture_id": "bd10fc2c-4db8-426e-a1fd-b16388d42c01",
+                      "order_id": "0ac038ef-de4a-491c-828e-b02ec0d4582d",
+                      "status": "partially_captured",
+                      "captured_amount": {
+                        "amount": 230,
+                        "currency": "SAR"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orders/{order_id}/cancel": {
+      "post": {
+        "tags": [
+          "Online Checkout"
+        ],
+        "summary": "Cancel Order",
+        "description": "This endpoint is requested to cancel or update the total order amount while order status on `authorised` (before the order is captured or shipping process is done). The order status value will be `canceled` or `updated` based on the modification applied to the total amount.",
+        "operationId": "cancelOrder",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "total_amount"
+                ],
+                "properties": {
+                  "total_amount": {
+                    "type": "object",
+                    "description": "Total amount to be charged back to consumer.",
+                    "properties": {
+                      "amount": {
+                        "type": "number",
+                        "example": 300,
+                        "default": 300
+                      },
+                      "currency": {
+                        "type": "string",
+                        "enum": [
+                          "SAR",
+                          "AED",
+                          "BHD",
+                          "KWD",
+                          "OMR"
+                        ],
+                        "example": "SAR",
+                        "default": "SAR"
+                      }
+                    }
+                  },
+                  "shipping_amount": {
+                    "type": "object",
+                    "description": "Total amount for the shipping of the order.",
+                    "properties": {
+                      "amount": {
+                        "type": "number",
+                        "example": 300,
+                        "minimum": 0,
+                        "default": 0
+                      },
+                      "currency": {
+                        "type": "string",
+                        "enum": [
+                          "SAR",
+                          "AED",
+                          "BHD",
+                          "KWD",
+                          "OMR"
+                        ],
+                        "example": "SAR",
+                        "default": "SAR"
+                      }
+                    }
+                  },
+                  "tax_amount": {
+                    "type": "object",
+                    "description": "Total amount of taxes, if additionally applied.",
+                    "properties": {
+                      "amount": {
+                        "type": "number",
+                        "example": 100,
+                        "minimum": 0,
+                        "default": 100
+                      },
+                      "currency": {
+                        "type": "string",
+                        "enum": [
+                          "SAR",
+                          "AED",
+                          "BHD",
+                          "KWD",
+                          "OMR"
+                        ],
+                        "example": "SAR",
+                        "default": "SAR"
+                      }
+                    }
+                  },
+                  "discount_amount": {
+                    "type": "object",
+                    "properties": {
+                      "amount": {
+                        "type": "number",
+                        "example": 10,
+                        "minimum": 0,
+                        "default": 10
+                      },
+                      "currency": {
+                        "type": "string",
+                        "enum": [
+                          "SAR",
+                          "AED",
+                          "BHD",
+                          "KWD",
+                          "OMR"
+                        ],
+                        "example": "SAR",
+                        "default": "SAR"
+                      }
+                    }
+                  },
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "reference_id",
+                        "type",
+                        "name",
+                        "sku",
+                        "quantity",
+                        "total_amount"
+                      ],
+                      "description": "An array of objects to detail the items in this order as seperate objects for each item.",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "description": "Product name. `<=255 characters`",
+                          "example": "Lego City 8601",
+                          "maximum": 255
+                        },
+                        "quantity": {
+                          "type": "number",
+                          "description": "How many of this specific item is being purchased",
+                          "example": 1
+                        },
+                        "reference_id": {
+                          "type": "string",
+                          "description": "The unique id of the item from merchant's side",
+                          "example": "123"
+                        },
+                        "sku": {
+                          "type": "string",
+                          "description": "Product SKU. **`<= 128 characters`**",
+                          "example": "SA-12436",
+                          "maximum": 128
+                        },
+                        "item_url": {
+                          "type": "string",
+                          "description": "URL of the item from merchant's website. **`<= 1024 characters`**",
+                          "format": "uri",
+                          "example": "SA-12436",
+                          "maximum": 1024
+                        },
+                        "image_url": {
+                          "type": "string",
+                          "description": "URL to an image of the product that can be later displayed to the customer. **`<= 1024 characters`** <br /> **Size** = 2-3 MB maximum <br /> **Resolution** WxH = 1024xY (the Y height of image should be small).",
+                          "format": "uri",
+                          "example": "SA-12436",
+                          "maximum": 1024
+                        },
+                        "unit_price": {
+                          "type": "object",
+                          "properties": {
+                            "amount": {
+                              "type": "number",
+                              "example": 490
+                            },
+                            "currency": {
+                              "type": "string",
+                              "enum": [
+                                "SAR",
+                                "AED",
+                                "BHD",
+                                "KWD",
+                                "OMR"
+                              ],
+                              "example": "SAR"
+                            }
+                          }
+                        },
+                        "tax_amount": {
+                          "type": "object",
+                          "properties": {
+                            "amount": {
+                              "type": "number",
+                              "example": 10,
+                              "minimum": 0
+                            },
+                            "currency": {
+                              "type": "string",
+                              "enum": [
+                                "SAR",
+                                "AED",
+                                "BHD",
+                                "KWD",
+                                "OMR"
+                              ],
+                              "example": "SAR"
+                            }
+                          }
+                        },
+                        "discount_amount": {
+                          "type": "object",
+                          "properties": {
+                            "amount": {
+                              "type": "number",
+                              "example": 100
+                            },
+                            "currency": {
+                              "type": "string",
+                              "enum": [
+                                "SAR",
+                                "AED",
+                                "BHD",
+                                "KWD",
+                                "OMR"
+                              ],
+                              "example": "SAR"
+                            }
+                          }
+                        },
+                        "total_amount": {
+                          "type": "object",
+                          "properties": {
+                            "amount": {
+                              "type": "string",
+                              "example": "100"
+                            },
+                            "currency": {
+                              "type": "string",
+                              "enum": [
+                                "SAR",
+                                "AED",
+                                "BHD",
+                                "KWD",
+                                "OMR"
+                              ],
+                              "example": "SAR"
+                            }
+                          }
+                        },
+                        "type": {
+                          "type": "string",
+                          "example": "Digital"
+                        }
+                      }
+                    },
+                    "default": [
+                      {
+                        "name": "Lego City 8601",
+                        "type": "Digital",
+                        "reference_id": "123",
+                        "sku": "SA-12436",
+                        "quantity": 1,
+                        "discount_amount": {
+                          "amount": 100,
+                          "currency": "SAR"
+                        },
+                        "tax_amount": {
+                          "amount": 10,
+                          "currency": "SAR"
+                        },
+                        "unit_price": {
+                          "amount": 490,
+                          "currency": "SAR"
+                        },
+                        "total_amount": {
+                          "amount": 100,
+                          "currency": "SAR"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "cancel_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "order_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "updated",
+                        "canceled"
+                      ]
+                    },
+                    "canceled_amount": {
+                      "items": {
+                        "properties": {
+                          "amount": {
+                            "type": "number"
+                          },
+                          "currency": {
+                            "type": "string",
+                            "enum": [
+                              "SAR",
+                              "AED",
+                              "KWD",
+                              "BHD",
+                              "OMR"
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "x-readme-ref-name": "cancel"
+                },
+                "examples": {
+                  "Updated": {
+                    "value": {
+                      "order_id": "870e3e2e-e88a-4933-9ec0-7f7b8ed65e0c",
+                      "cancel_id": "fecc5fce-2079-4292-8761-40726253f0bf",
+                      "status": "updated",
+                      "canceled_amount": {
+                        "amount": 100,
+                        "currency": "SAR"
+                      }
+                    }
+                  },
+                  "Canceled": {
+                    "value": {
+                      "order_id": "870e3e2e-e88a-4933-9ec0-7f7b8ed65e0c",
+                      "cancel_id": "2c58ce01-04af-4387-9450-269ff822b558",
+                      "status": "canceled",
+                      "canceled_amount": {
+                        "amount": 300,
+                        "currency": "SAR"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Cannot cancel orders in `approved` state",
+            "content": {
+              "application/json": {
+                "example": {
+                  "message": "The order 870e3e2e-e88a-4933-9ec0-7f7b8ed65e0c cannot be moved to the status canceled from approved",
+                  "errors": [
+                    {
+                      "error_code": "transition_not_allowed",
+                      "data": {
+                        "order_id": "870e3e2e-e88a-4933-9ec0-7f7b8ed65e0c",
+                        "old_state": "approved",
+                        "new_state": "canceled"
+                      }
+                    }
+                  ],
+                  "data": {},
+                  "title": null,
+                  "screen_type": null
+                }
+              }
+            }
+          }
+        }
+      },
+      "parameters": [
+        {
+          "name": "order_id",
+          "in": "path",
+          "required": true,
+          "description": "Unique Tamara `order_id`, obtained from the response of create checkout/in-store checkout session endpoint.",
+          "schema": {
+            "type": "string",
+            "format": "uuid",
+            "example": "ff776045-513b-4cd7-8b4f-e60673daad84",
+            "default": "ff776045-513b-4cd7-8b4f-e60673daad84"
+          }
+        }
+      ]
+    },
+    "/payments/simplified-refund/{order_id}": {
+      "post": {
+        "tags": [
+          "Refunds"
+        ],
+        "summary": "Simplified Refund",
+        "description": "This API is to be used to process refunds for captured orders.",
+        "operationId": "simplifiedRefund",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "total_amount",
+                  "comment"
+                ],
+                "properties": {
+                  "total_amount": {
+                    "type": "object",
+                    "description": "Total amount to be refunded to consumer, not including any discount amount.",
+                    "properties": {
+                      "amount": {
+                        "type": "number",
+                        "example": 300,
+                        "default": 300
+                      },
+                      "currency": {
+                        "type": "string",
+                        "enum": [
+                          "SAR",
+                          "AED",
+                          "BHD",
+                          "KWD",
+                          "OMR"
+                        ],
+                        "example": "SAR",
+                        "default": "SAR"
+                      }
+                    }
+                  },
+                  "comment": {
+                    "type": "string",
+                    "description": "Notes or comments as a reference point that will be added to this order's transaction history.",
+                    "example": "Refund for the order A123",
+                    "default": "Refund for the order A123"
+                  },
+                  "merchant_refund_id": {
+                    "type": "string",
+                    "description": "Used to input the merchant's own internal refund ID, if any, to be stored on the refund request and order details.",
+                    "example": "RefundID1"
+                  }
+                }
+              },
+              "example": {
+                "total_amount": {
+                  "amount": 100,
+                  "currency": "SAR"
+                },
+                "comment": "Refund for the order 123",
+                "merchant_refund_id": "123456-R1"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Refund Successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "order_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "comment": {
+                      "type": "string"
+                    },
+                    "refund_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "capture_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "fully_refunded",
+                        "partially_refunded"
+                      ]
+                    },
+                    "refunded_amount": {
+                      "items": {
+                        "properties": {
+                          "amount": {
+                            "type": "number"
+                          },
+                          "currency": {
+                            "type": "string",
+                            "enum": [
+                              "SAR",
+                              "AED",
+                              "KWD",
+                              "BHD",
+                              "OMR"
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "x-readme-ref-name": "simplified-refunds"
+                },
+                "examples": {
+                  "Fully Refunded": {
+                    "value": {
+                      "order_id": "0ac038ef-de4a-491c-828e-b02ec0d4582d",
+                      "comment": "Refund for the order 123",
+                      "refund_id": "a04390d4-5690-45cd-9086-6980d8a86f72",
+                      "capture_id": "bd10fc2c-4db8-426e-a1fd-b16388d42c01",
+                      "status": "fully_refunded",
+                      "refunded_amount": {
+                        "amount": 300,
+                        "currency": "SAR"
+                      }
+                    }
+                  },
+                  "Partially Refunded": {
+                    "value": {
+                      "order_id": "0ac038ef-de4a-491c-828e-b02ec0d4582d",
+                      "comment": "Refund for the order 123",
+                      "refund_id": "924001dc-0e25-463e-82f2-1848aca95542",
+                      "capture_id": "bd10fc2c-4db8-426e-a1fd-b16388d42c01",
+                      "status": "partially_refunded",
+                      "refunded_amount": {
+                        "amount": 100,
+                        "currency": "SAR"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "parameters": [
+        {
+          "name": "order_id",
+          "in": "path",
+          "description": "Unique Tamara `order_id` from the response of the creation of the checkout session whether online or in-store.",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid",
+            "example": "ff776045-513b-4cd7-8b4f-e60673daad84",
+            "default": "ff776045-513b-4cd7-8b4f-e60673daad84"
+          }
+        }
+      ]
+    },
+    "/checkout/{checkout_id}/void": {
+      "post": {
+        "tags": [
+          "In-Store Checkout"
+        ],
+        "summary": "Void Checkout Session",
+        "description": "This API endpoint provides the functionality to void any In-Store checkout session. This is particularly useful in-store when customers need to make any changes to their orders being paid with Tamara.",
+        "operationId": "voidCheckoutSession",
+        "parameters": [
+          {
+            "name": "order_id",
+            "in": "query",
+            "description": "Unique Tamara `order_id`, obtained from the response of create checkout/in-store checkout session endpoint.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "example": "2aa3d561-40a7-4150-a669-5e5852b04d5e",
+              "default": "2aa3d561-40a7-4150-a669-5e5852b04d5e"
+            }
+          },
+          {
+            "name": "store_code",
+            "in": "query",
+            "description": "The unique store code/name from which request is called",
+            "schema": {
+              "type": "string",
+              "example": "Branch A",
+              "default": "Branch A"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "order_was_voided": {
+                      "type": "boolean"
+                    },
+                    "captured_amount": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "amount": {
+                            "type": "number"
+                          },
+                          "currency": {
+                            "type": "string",
+                            "enum": [
+                              "SAR",
+                              "AED",
+                              "KWD",
+                              "BHD",
+                              "OMR"
+                            ]
+                          },
+                          "message": {
+                            "type": "string"
+                          },
+                          "store_code": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "x-readme-ref-name": "void"
+                },
+                "examples": {
+                  "Void Success": {
+                    "value": {
+                      "order_was_voided": true,
+                      "captured_amount": {
+                        "amount": 100,
+                        "currency": "SAR"
+                      },
+                      "message": "success",
+                      "store_code": "Test Store"
+                    }
+                  },
+                  "Checkout Already Completed": {
+                    "value": {
+                      "order_was_voided": false,
+                      "captured_amount": {
+                        "amount": 100,
+                        "currency": "SAR"
+                      },
+                      "message": "checkout_already_completed",
+                      "store_code": "Test Store"
+                    }
+                  },
+                  "Checkout Already Expired": {
+                    "value": {
+                      "order_was_voided": false,
+                      "captured_amount": {
+                        "amount": 100,
+                        "currency": "SAR"
+                      },
+                      "message": "checkout_already_expired",
+                      "store_code": "Test Store"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "parameters": [
+        {
+          "name": "checkout_id",
+          "in": "path",
+          "required": true,
+          "description": "Unique Tamara `checkout_id`, obtained from the response of create checkout/in-store checkout session endpoint.",
+          "schema": {
+            "type": "string",
+            "example": "ff776045-513b-4cd7-8b4f-e60673daad84",
+            "default": "ff776045-513b-4cd7-8b4f-e60673daad84"
+          }
+        }
+      ]
+    },
+    "/orders/{order_id}/reference-id": {
+      "put": {
+        "tags": [
+          "Post-Checkout"
+        ],
+        "summary": "Update order_reference_id",
+        "description": "Update `order_reference_id` value that is stored at **Tamara's** side at any point after the original checkout session has been created.",
+        "operationId": "updateOrderReferenceId",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "order_reference_id"
+                ],
+                "description": "New order_reference_id to be updated.",
+                "properties": {
+                  "order_reference_id": {
+                    "type": "string",
+                    "example": "A1234",
+                    "default": "A1234"
+                  }
+                }
+              },
+              "example": {
+                "order_reference_id": "A1234"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "x-readme-ref-name": "update-reference-id"
+                },
+                "examples": {
+                  "Success": {
+                    "value": {
+                      "message": "Order reference id was updated successfully"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "parameters": [
+        {
+          "name": "order_id",
+          "in": "path",
+          "description": "Unique Tamara `order_id` from the response of the creation of the checkout session whether online or in-store.",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid",
+            "example": "ff776045-513b-4cd7-8b4f-e60673daad84",
+            "default": "ff776045-513b-4cd7-8b4f-e60673daad84"
+          }
+        }
+      ]
+    },
+    "/pre-checkout/v1/eligibility": {
+      "post": {
+        "description": "This endpoint helps you to check whether Tamara treats a customer as eligible or not, based on active decline records we hold for that customer.",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "is_eligible": {
+                      "type": "boolean",
+                      "default": "true"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string",
+                      "default": "invalid json"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "order": {
+                    "type": "object",
+                    "properties": {
+                      "amount": {
+                        "type": "number",
+                        "default": "300"
+                      },
+                      "currency": {
+                        "type": "string",
+                        "default": "SAR",
+                        "enum": [
+                          "SAR",
+                          "AED",
+                          "BHD",
+                          "KWD",
+                          "OMR"
+                        ]
+                      }
+                    }
+                  },
+                  "customer": {
+                    "type": "object",
+                    "properties": {
+                      "phone": {
+                        "type": "string",
+                        "default": "966501234567"
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "order",
+                  "customer"
+                ]
+              }
+            }
+          }
+        },
+        "summary": "Pre-Checkout Eligibility ",
+        "operationId": "post_pre-checkout-v1-eligibility"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Online Checkout"
+    },
+    {
+      "name": "Post-Checkout"
+    },
+    {
+      "name": "Refunds"
+    },
+    {
+      "name": "In-Store Checkout"
+    }
+  ]
+}
