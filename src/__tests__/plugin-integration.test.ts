@@ -584,6 +584,9 @@ describe("bnpl() Better Auth integration", () => {
 	it("captures Tabby automatically when an authorized webhook arrives", async () => {
 		const captureArgs: BnplCaptureArgs[] = [];
 		const capture = vi.fn(async (_orderId: string, args: BnplCaptureArgs) => {
+			if (!args.merchantReferenceId?.trim()) {
+				throw new Error("merchantReferenceId is required");
+			}
 			captureArgs.push(args);
 			return {
 				captureId: "cap-tabby-authorized",
@@ -645,6 +648,7 @@ describe("bnpl() Better Auth integration", () => {
 		expect(capture).toHaveBeenCalledOnce();
 		expect(captureArgs[0]).toMatchObject({
 			totalAmount: { amount: "100.00", currency: "SAR" },
+			merchantReferenceId: "bnpl:tabby:ord-integration:capture:10000",
 			shippingInfo: {
 				shippedAt: "2026-06-04T16:00:00.000Z",
 				shippingCompany: "Digital delivery",
