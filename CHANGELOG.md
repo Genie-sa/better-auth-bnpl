@@ -1,5 +1,11 @@
 # better-auth-bnpl
 
+## 0.2.1
+
+### Patch Changes
+
+- 7c60e68: Accept and normalize Tamara's empty webhook header array in retrieve and update responses.
+
 ## 0.2.0
 
 ### Minor Changes
