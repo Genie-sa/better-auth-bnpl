@@ -151,7 +151,9 @@ describe("webhook lifecycle", () => {
 	});
 	it("retries an authorized webhook after auto-capture fails", async () => {
 		let shouldThrow = true;
-		const capture = vi.fn(async (_orderId: string, _args: BnplCaptureArgs) => {
+		const references: Array<string | undefined> = [];
+		const capture = vi.fn(async (_orderId: string, args: BnplCaptureArgs) => {
+			references.push(args.merchantReferenceId);
 			if (shouldThrow) throw new Error("capture boom");
 			return {
 				captureId: "cap-auto-retry",
@@ -197,6 +199,18 @@ describe("webhook lifecycle", () => {
 		expect(capture).toHaveBeenCalledTimes(2);
 		expect(instance.db.bnplWebhookEvent?.[0]?.status).toBe("processed");
 		expect(instance.db.bnplWebhookEvent?.[0]?.attempts).toBe(2);
+		expect(orderRow(instance).status).toBe("fully_captured");
+		expect(orderRow(instance).capturedAmountMinor).toBe(10000);
+		expect(references).toEqual([
+			`bnpl:tabby:${ORDER_ID}:capture:10000`,
+			`bnpl:tabby:${ORDER_ID}:capture:10000`,
+		]);
+		const afterSuccess = await post(instance, {
+			...payload,
+			dedupKey: "tabby:authorized:auto-capture-after-success",
+		});
+		expect(afterSuccess.error).toBeNull();
+		expect(capture).toHaveBeenCalledTimes(2);
 		expect(orderRow(instance).status).toBe("fully_captured");
 		expect(orderRow(instance).capturedAmountMinor).toBe(10000);
 	});

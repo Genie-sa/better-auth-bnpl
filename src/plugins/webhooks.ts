@@ -15,6 +15,7 @@ import type { BnplWebhookEvent } from "../core/types";
 import type { BnplEndpointRecord, BnplOptions } from "../plugin-types";
 import { type AdminAuthorizer, assertAdmin } from "./admin";
 import { buildAuthoriseOrderUpdate } from "./authorise-update";
+import { operationReference } from "./operation-reference";
 import { OrderStoreMissingError, mutateOrder } from "./order-store";
 import { assertPersistedOrders } from "./persistence";
 import {
@@ -846,7 +847,19 @@ async function runAutoCapture(
 		}
 		const captureResult = await provider.capture(
 			orderId,
-			{ totalAmount: total, shippingInfo },
+			{
+				totalAmount: total,
+				shippingInfo,
+				merchantReferenceId: operationReference(
+					{
+						provider: provider.id,
+						providerOrderId: orderId,
+						capturedAmountMinor: row.capturedAmountMinor,
+					},
+					"capture",
+					row.amountMinor,
+				),
+			},
 			{ logger: ctx.context.logger },
 		);
 		await mutateOrder<{

@@ -12,6 +12,7 @@ import type { BnplProvider } from "../core/provider";
 import { absoluteUrlMax1024Schema } from "../core/url";
 import type { BnplOptions } from "../plugin-types";
 import { buildAuthoriseOrderUpdate } from "./authorise-update";
+import { type MoneyOperation, operationReference } from "./operation-reference";
 import { mutateOrder } from "./order-store";
 import { assertPersistedOrders } from "./persistence";
 import { moneySchema, orderItemSchema } from "./shared";
@@ -94,7 +95,6 @@ type AdminFailureCode =
 	| "AUTHORISE_FAILED"
 	| "RECONCILE_FAILED"
 	| "CLOSE_PAYMENT_FAILED";
-type AdminMoneyOperation = "capture" | "refund";
 interface AdminMoneyOperationUpdate {
 	status: string;
 	rawData: string;
@@ -138,16 +138,8 @@ function parseOperationAmount(
 		});
 	}
 }
-function operationReference(
-	row: OrderRow,
-	operation: AdminMoneyOperation,
-	amountMinor: number,
-): string {
-	const previousMinor = operation === "capture" ? row.capturedAmountMinor : row.refundedAmountMinor;
-	return `bnpl:${row.provider}:${row.providerOrderId}:${operation}:${previousMinor + amountMinor}`;
-}
 function moneyOperationStatus(
-	operation: AdminMoneyOperation,
+	operation: MoneyOperation,
 	cumulativeMinor: number,
 	orderAmountMinor: number,
 ): string {
@@ -159,7 +151,7 @@ function moneyOperationStatus(
 async function persistAdminMoneyOperation(
 	ctx: GenericEndpointContext,
 	row: OrderRow,
-	operation: AdminMoneyOperation,
+	operation: MoneyOperation,
 	amountMinor: number,
 	raw: unknown,
 ): Promise<void> {
