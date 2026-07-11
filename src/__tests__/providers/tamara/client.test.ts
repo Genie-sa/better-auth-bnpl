@@ -74,7 +74,7 @@ describe("TamaraClient", () => {
 				});
 			}
 			if (request.method === "DELETE" && request.url.endsWith("/webhooks/wh_1")) {
-				return new Response(null, { status: 200 });
+				return Response.json({ message: "Webhook was removed successfully" });
 			}
 			throw new Error(`unexpected Tamara request: ${request.method} ${request.url}`);
 		};
@@ -105,6 +105,71 @@ describe("TamaraClient", () => {
 			"PUT https://api.tamara.test/webhooks/wh_1",
 			"DELETE https://api.tamara.test/webhooks/wh_1",
 		]);
+	});
+	it("accepts Tamara's deletion acknowledgement and encodes the webhook id", async () => {
+		let method: string | undefined;
+		let url: string | undefined;
+		let authorization: string | null = null;
+		const fetch: typeof globalThis.fetch = async (input, init) => {
+			method = init?.method;
+			url = String(input);
+			authorization = new Headers(init?.headers).get("Authorization");
+			return Response.json({ message: "Webhook was removed successfully" });
+		};
+		const client = new TamaraClient({
+			apiToken: "tamara-token",
+			baseUrl: "https://api.tamara.test",
+			fetch,
+		});
+
+		const result = await client.deleteWebhook("webhook/id with spaces");
+
+		expect(result).toBeUndefined();
+		expect(method).toBe("DELETE");
+		expect(url).toBe("https://api.tamara.test/webhooks/webhook%2Fid%20with%20spaces");
+		expect(authorization).toBe("Bearer tamara-token");
+		expectTypeOf<ReturnType<TamaraClient["deleteWebhook"]>>().toEqualTypeOf<Promise<void>>();
+	});
+	it("accepts an empty successful deletion response", async () => {
+		const fetch: typeof globalThis.fetch = async () => new Response(null, { status: 204 });
+		const client = new TamaraClient({
+			apiToken: "tamara-token",
+			baseUrl: "https://api.tamara.test",
+			fetch,
+		});
+
+		await expect(client.deleteWebhook("wh_empty_response")).resolves.toBeUndefined();
+	});
+	it("rejects malformed successful deletion responses", async () => {
+		const fetch: typeof globalThis.fetch = async () => Response.json({ ok: true });
+		const client = new TamaraClient({
+			apiToken: "tamara-token",
+			baseUrl: "https://api.tamara.test",
+			fetch,
+		});
+
+		await expect(client.deleteWebhook("wh_malformed_response")).rejects.toMatchObject({
+			name: "BnplProviderError",
+			provider: "tamara",
+			message: "Tamara deleteWebhook returned unexpected shape",
+			body: { ok: true },
+		});
+	});
+	it.each([401, 403, 500])("preserves Tamara deletion HTTP %i errors", async (status) => {
+		const body = { message: `Tamara deletion failed with ${status}` };
+		const fetch: typeof globalThis.fetch = async () => Response.json(body, { status });
+		const client = new TamaraClient({
+			apiToken: "tamara-token",
+			baseUrl: "https://api.tamara.test",
+			fetch,
+		});
+
+		await expect(client.deleteWebhook("wh_provider_error")).rejects.toMatchObject({
+			name: "BnplProviderError",
+			provider: "tamara",
+			status,
+			body,
+		});
 	});
 	it("normalizes empty webhook response headers", async () => {
 		const fetch: typeof globalThis.fetch = async () =>

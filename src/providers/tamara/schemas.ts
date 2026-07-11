@@ -198,6 +198,12 @@ export const tamaraWebhookRegistrationResponseSchema = z
 		webhook_id: z.string(),
 	})
 	.passthrough();
+export const tamaraDeleteWebhookResponseSchema = z.union([
+	z.null(),
+	z.object({
+		message: z.string().min(1),
+	}),
+]);
 const tamaraWebhookResponseHeadersSchema = z
 	.union([z.record(z.string(), z.unknown()), z.array(z.never()).max(0)])
 	.transform((headers): Record<string, unknown> => (Array.isArray(headers) ? {} : headers));
