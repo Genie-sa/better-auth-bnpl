@@ -21,16 +21,6 @@ Install it via [skills.sh](https://www.skills.sh/):
 npx skills add Genie-sa/better-auth-bnpl
 ```
 
-## Breaking changes in this release
-
-- **Client return shape.** Every `authClient.bnpl.*` action now resolves to `{ data, error }` and never throws. Replace `const res = await authClient.bnpl.options(...)` / `res.options` with `const { data } = await ...` / `data.options`.
-- **`getOrder` param rename.** `getOrder(providerOrderId)` now queries by the provider's order id; the path parameter is `:providerOrderId` (was `:orderId`).
-- **User-facing reads drop raw payloads.** `GET /bnpl/orders*` no longer returns `rawData` or `remote.raw`. Full rows remain on the admin surface.
-- **Peer floor raised to `better-auth@^1.5.0`** (1.4 fails typecheck).
-- **Schema regeneration required.** New columns (`bnplOrder.version`; `bnplWebhookEvent.status`/`attempts`/`orderApplied`/`processedAt`/`lastError`) mean existing installs must re-run `npx @better-auth/cli generate`.
-- **Tamara replay tolerance is on by default** (`replayToleranceSeconds: 300`; pass `false` to disable).
-- **Server-client `authorize` return type.** `createBnplClient(...).authorize()` now returns the full `BnplAuthorizeResult` (`autoCaptured`/`captureId`/`capturedAmountMinor`/`raw`), not a stripped subset.
-
 ## What you get
 
 | Area | Included |
