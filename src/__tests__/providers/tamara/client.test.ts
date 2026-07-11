@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { z } from "zod";
 import { TamaraClient } from "../../../providers/tamara";
+import {
+	tamaraRegisterWebhookRequestSchema,
+	tamaraUpdateWebhookRequestSchema,
+	type tamaraWebhookDetailsResponseSchema,
+} from "../../../providers/tamara/schemas";
 const registerWebhookBodySchema = z.object({
 	type: z.enum(["order", "dispute"]),
 	events: z.array(z.string()),
@@ -65,6 +70,7 @@ describe("TamaraClient", () => {
 					url: "https://merchant.example/bnpl/webhooks/tamara-v2",
 					events: ["order_approved", "order_authorised"],
 					type: "order",
+					headers: [],
 				});
 			}
 			if (request.method === "DELETE" && request.url.endsWith("/webhooks/wh_1")) {
@@ -92,12 +98,94 @@ describe("TamaraClient", () => {
 		expect(registered.webhook_id).toBe("wh_1");
 		expect(retrieved.url).toBe("https://merchant.example/bnpl/webhooks/tamara");
 		expect(updated.events).toEqual(["order_approved", "order_authorised"]);
+		expect(updated.headers).toEqual({});
 		expect(requests.map((request) => `${request.method} ${request.url}`)).toEqual([
 			"POST https://api.tamara.test/webhooks",
 			"GET https://api.tamara.test/webhooks/wh_1",
 			"PUT https://api.tamara.test/webhooks/wh_1",
 			"DELETE https://api.tamara.test/webhooks/wh_1",
 		]);
+	});
+	it("normalizes empty webhook response headers", async () => {
+		const fetch: typeof globalThis.fetch = async () =>
+			Response.json({
+				webhook_id: "wh_empty_headers",
+				url: "https://merchant.example/bnpl/webhooks/tamara",
+				events: ["order_approved"],
+				type: "order",
+				headers: [],
+			});
+		const client = new TamaraClient({
+			apiToken: "tamara-token",
+			baseUrl: "https://api.tamara.test",
+			fetch,
+		});
+
+		const webhook = await client.retrieveWebhook("wh_empty_headers");
+
+		expect(webhook.headers).toEqual({});
+	});
+	it("preserves configured webhook response headers", async () => {
+		const fetch: typeof globalThis.fetch = async () =>
+			Response.json({
+				webhook_id: "wh_configured_headers",
+				url: "https://merchant.example/bnpl/webhooks/tamara",
+				events: ["order_approved"],
+				headers: { "X-Merchant-Webhook": "configured-value" },
+			});
+		const client = new TamaraClient({
+			apiToken: "tamara-token",
+			baseUrl: "https://api.tamara.test",
+			fetch,
+		});
+
+		const webhook = await client.retrieveWebhook("wh_configured_headers");
+
+		expect(webhook.headers).toEqual({ "X-Merchant-Webhook": "configured-value" });
+	});
+	it("rejects non-empty webhook response header arrays", async () => {
+		const fetch: typeof globalThis.fetch = async () =>
+			Response.json({
+				webhook_id: "wh_invalid_headers",
+				url: "https://merchant.example/bnpl/webhooks/tamara",
+				events: ["order_approved"],
+				headers: ["unexpected"],
+			});
+		const client = new TamaraClient({
+			apiToken: "tamara-token",
+			baseUrl: "https://api.tamara.test",
+			fetch,
+		});
+
+		await expect(client.retrieveWebhook("wh_invalid_headers")).rejects.toMatchObject({
+			name: "BnplProviderError",
+			message: "Tamara retrieveWebhook returned unexpected shape",
+		});
+	});
+	it("keeps webhook request headers record-only", () => {
+		expectTypeOf<z.output<typeof tamaraWebhookDetailsResponseSchema>["headers"]>().toEqualTypeOf<
+			Record<string, unknown> | undefined
+		>();
+		const registerRequest = {
+			type: "order",
+			events: ["order_approved"],
+			url: "https://merchant.example/bnpl/webhooks/tamara",
+			headers: { "X-Merchant-Webhook": "configured-value" },
+		};
+		const updateRequest = {
+			events: ["order_approved"],
+			url: "https://merchant.example/bnpl/webhooks/tamara",
+			headers: { "X-Merchant-Webhook": "configured-value" },
+		};
+
+		expect(tamaraRegisterWebhookRequestSchema.safeParse(registerRequest).success).toBe(true);
+		expect(tamaraUpdateWebhookRequestSchema.safeParse(updateRequest).success).toBe(true);
+		expect(
+			tamaraRegisterWebhookRequestSchema.safeParse({ ...registerRequest, headers: [] }).success,
+		).toBe(false);
+		expect(
+			tamaraUpdateWebhookRequestSchema.safeParse({ ...updateRequest, headers: [] }).success,
+		).toBe(false);
 	});
 	it("updates Tamara order_reference_id with the documented body", async () => {
 		let requestBody: z.infer<typeof updateReferenceIdBodySchema> | undefined;

@@ -198,13 +198,16 @@ export const tamaraWebhookRegistrationResponseSchema = z
 		webhook_id: z.string(),
 	})
 	.passthrough();
+const tamaraWebhookResponseHeadersSchema = z
+	.union([z.record(z.string(), z.unknown()), z.array(z.never()).max(0)])
+	.transform((headers): Record<string, unknown> => (Array.isArray(headers) ? {} : headers));
 export const tamaraWebhookDetailsResponseSchema = z
 	.object({
 		webhook_id: z.string(),
 		url: z.string(),
 		events: z.array(z.string()),
 		type: z.string().optional(),
-		headers: z.record(z.string(), z.unknown()).optional(),
+		headers: tamaraWebhookResponseHeadersSchema.optional(),
 	})
 	.passthrough();
 export const tamaraUpdateReferenceIdResponseSchema = z
