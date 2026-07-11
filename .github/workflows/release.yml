@@ -25,20 +25,52 @@ jobs:
       id-token: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
 
-      - name: Setup
-        uses: ./.github/actions/setup
+      - name: Setup pnpm
+        uses: pnpm/action-setup@a15d269cd4658e1107c09f1fabf4cbd7bd1f308a # v4.4.0
+        with:
+          version: 10.13.1
 
-      - name: Upgrade npm for trusted publishing
-        run: npm install --global npm@latest
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
 
-      - name: Create Release Pull Request or Publish
-        uses: changesets/action@v1
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Pin npm for trusted publishing
+        run: npm install --global npm@11.5.1
+
+      - name: Version
+        id: changesets
+        uses: changesets/action@3841a0683d3cfa6dae0f9bb335290003010fe3f0 # v1.9.0
         with:
           version: pnpm version-packages
-          publish: pnpm release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish and release
+        if: steps.changesets.outputs.hasChangesets == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pnpm build
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          if npm view "$name@$version" version >/dev/null 2>&1; then
+            echo "$name@$version already published"
+          else
+            npm publish --access public
+          fi
+          if gh release view "v$version" >/dev/null 2>&1; then
+            echo "v$version release already exists"
+            exit 0
+          fi
+          notes=$(awk -v header="## $version" '$0==header{found=1} /^## /&&$0!=header{if(found)exit} found' CHANGELOG.md)
+          gh release create "v$version" --target "$GITHUB_SHA" --title "v$version" --notes "${notes:-$name@$version}"
