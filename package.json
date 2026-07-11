@@ -1,6 +1,6 @@
 {
 	"name": "better-auth-bnpl",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "Buy-Now-Pay-Later plugin for Better Auth — unified checkout, orders, webhooks, and admin across Tabby and Tamara. Pluggable providers, end-user picker, fully type-safe.",
 	"main": "./dist/index.cjs",
 	"module": "./dist/index.js",
@@ -83,7 +83,12 @@
 		"prepare": "pnpm build",
 		"prepublishOnly": "pnpm typecheck && pnpm lint && pnpm test && pnpm build"
 	},
-	"files": ["dist", "skills", "README.md", "LICENSE"],
+	"files": [
+		"dist",
+		"skills",
+		"README.md",
+		"LICENSE"
+	],
 	"keywords": [
 		"better-auth",
 		"better-auth-plugin",
