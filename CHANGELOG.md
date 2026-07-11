@@ -1,5 +1,11 @@
 # better-auth-bnpl
 
+## 0.2.2
+
+### Patch Changes
+
+- 9843bfb: Accept Tamara's JSON acknowledgement when deleting a webhook.
+
 ## 0.2.1
 
 ### Patch Changes
