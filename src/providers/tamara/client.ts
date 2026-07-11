@@ -1,11 +1,6 @@
 import type { z } from "zod";
 import type { ProviderFetch } from "../../core/provider";
-import {
-	type ProviderHttpMethod,
-	type SleepFn,
-	requestProviderJson,
-	requestProviderVoid,
-} from "../http";
+import { type ProviderHttpMethod, type SleepFn, requestProviderJson } from "../http";
 import { createOpenApiPathBuilder } from "../openapi-path";
 import { TAMARA_BASE_URLS } from "./constants";
 import type { paths as TamaraOpenApiPaths } from "./openapi";
@@ -17,6 +12,7 @@ import {
 	tamaraCaptureResponseSchema,
 	tamaraCheckoutRequestSchema,
 	tamaraCheckoutResponseSchema,
+	tamaraDeleteWebhookResponseSchema,
 	tamaraOrderDetailsResponseSchema,
 	tamaraPreCheckoutEligibilityRequestSchema,
 	tamaraPreCheckoutEligibilityResponseSchema,
@@ -111,20 +107,6 @@ export class TamaraClient {
 			bodySchema,
 			schema,
 			label,
-			timeoutMs: this.timeoutMs,
-			sleep: this.sleep,
-		});
-	}
-	private requestVoid(method: ProviderHttpMethod, path: string, body?: unknown): Promise<void> {
-		return requestProviderVoid({
-			provider: "tamara",
-			providerName: "Tamara",
-			baseUrl: this.baseUrl,
-			fetchImpl: this.fetchImpl,
-			method,
-			headers: this.headers(),
-			path,
-			body,
 			timeoutMs: this.timeoutMs,
 			sleep: this.sleep,
 		});
@@ -255,7 +237,12 @@ export class TamaraClient {
 		});
 	}
 	async deleteWebhook(webhookId: string): Promise<void> {
-		await this.requestVoid("DELETE", `/webhooks/${encodeURIComponent(webhookId)}`);
+		await this.request({
+			method: "DELETE",
+			path: `/webhooks/${encodeURIComponent(webhookId)}`,
+			schema: tamaraDeleteWebhookResponseSchema,
+			label: "deleteWebhook",
+		});
 	}
 	async updateReferenceId(
 		orderId: string,
