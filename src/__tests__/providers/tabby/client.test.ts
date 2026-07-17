@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import type { BnplCheckoutInput } from "../../../core/types";
 import { TabbyClient } from "../../../providers/tabby";
+import { toTabbyCheckoutRequest } from "../../../providers/tabby/adapter";
+const checkoutAttachmentWireBodySchema = z.object({
+	payment: z.object({
+		attachment: z.object({
+			body: z.string(),
+			content_type: z.literal("application/vnd.tabby.v1+json"),
+		}),
+	}),
+});
 const registerWebhookBodySchema = z.object({
 	url: z.string(),
 	is_test: z.boolean().optional(),
@@ -96,6 +106,76 @@ describe("TabbyClient", () => {
 			"https://api.tabby.ai/api/v2/payments/payment-id",
 			"https://api.tabby.test/api/v2/payments/payment-id",
 		]);
+	});
+	it("serializes checkout attachment.body as JSON on the wire", async () => {
+		const { client, requests } = makeClient([
+			{
+				id: "checkout-id",
+				status: "created",
+				configuration: {},
+				payment: {
+					id: "payment-id",
+					status: "CREATED",
+					amount: "100.00",
+					currency: "SAR",
+				},
+			},
+		]);
+		const educationDetails = {
+			merchant_subtype: "courses_training" as const,
+			program: { payment_tenure_months: 3, months_to_completion: 3 },
+			student_history: { late_payments_count: 0, avg_overdue_duration_days: 0 },
+		};
+		const input: BnplCheckoutInput = {
+			orderReferenceId: "ord-attachment",
+			description: "Course checkout",
+			totalAmount: { amount: "100.00", currency: "SAR" },
+			items: [
+				{
+					referenceId: "course-1",
+					name: "Course",
+					sku: "course-1",
+					quantity: 1,
+					totalAmount: { amount: "100.00", currency: "SAR" },
+				},
+			],
+			buyer: {
+				firstName: "Test",
+				lastName: "Buyer",
+				email: "buyer@example.com",
+				phone: "+966500000000",
+			},
+			shippingAddress: {
+				line1: "King Fahd Road",
+				city: "Riyadh",
+				countryCode: "SA",
+			},
+			countryCode: "SA",
+			merchantUrl: {
+				success: "https://merchant.example/success",
+				cancel: "https://merchant.example/cancel",
+				failure: "https://merchant.example/failure",
+				notification: "https://merchant.example/webhooks/tabby",
+			},
+			providerData: {
+				buyer_history: {
+					registered_since: "2024-01-01T00:00:00Z",
+					loyalty_level: 0,
+				},
+				order_history: [],
+				attachment: {
+					body: { education_details: educationDetails },
+					content_type: "application/vnd.tabby.v1+json",
+				},
+			},
+		};
+
+		await client.createCheckout(toTabbyCheckoutRequest(input, { merchantCode: "MERCH" }));
+
+		const wireBody = checkoutAttachmentWireBodySchema.parse(requests[0]?.body);
+		expect(JSON.parse(wireBody.payment.attachment.body)).toEqual({
+			education_details: educationDetails,
+		});
 	});
 	it("registers webhooks with Tabby's documented header.title payload", async () => {
 		const { client, requests } = makeClient([

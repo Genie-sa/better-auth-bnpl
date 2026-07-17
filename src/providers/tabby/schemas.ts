@@ -133,6 +133,12 @@ export const tabbyEducationAttachmentSchema = z
 		content_type: z.literal("application/vnd.tabby.v1+json"),
 	})
 	.strict();
+const tabbyEducationAttachmentRequestSchema = z
+	.object({
+		body: nonEmptyStringSchema,
+		content_type: z.literal("application/vnd.tabby.v1+json"),
+	})
+	.strict();
 export const tabbyCheckoutDataSchema = z
 	.object({
 		buyer_history: tabbyBuyerHistoryRequestSchema,
@@ -149,7 +155,7 @@ export const tabbyPaymentRequestSchema = z.object({
 	order: tabbyOrderRequestSchema,
 	buyer_history: tabbyBuyerHistoryRequestSchema.optional(),
 	order_history: z.array(tabbyCheckoutCreationOrderHistorySchema).max(10).optional(),
-	attachment: tabbyEducationAttachmentSchema.optional(),
+	attachment: tabbyEducationAttachmentRequestSchema.optional(),
 	meta: z.record(z.string(), z.unknown()).optional(),
 });
 export const tabbyEligibilityPaymentRequestSchema = z.object({
