@@ -9,6 +9,7 @@ import type {
 	BnplPaymentType,
 	BnplWebhookEvent,
 } from "../../core/types";
+import { tabbyCheckoutDataSchema } from "./schemas";
 import type {
 	TabbyBuyer,
 	TabbyCaptureRecord,
@@ -106,6 +107,13 @@ export function toTabbyCheckoutRequest(
 	opts: ToTabbyCheckoutOptions,
 ): TabbyCheckoutRequest {
 	const lang = input.locale?.startsWith("ar") ? "ar" : "en";
+	const providerData =
+		input.providerData === undefined
+			? undefined
+			: tabbyCheckoutDataSchema.safeParse(input.providerData);
+	if (providerData && !providerData.success) {
+		throw new Error("tabby: checkout providerData is invalid");
+	}
 	return {
 		payment: {
 			amount: input.totalAmount.amount,
@@ -121,6 +129,13 @@ export function toTabbyCheckoutRequest(
 				items: input.items.map(toTabbyItem),
 			},
 			meta: input.metadata,
+			...(providerData
+				? {
+						buyer_history: providerData.data.buyer_history,
+						order_history: providerData.data.order_history,
+						attachment: providerData.data.attachment,
+					}
+				: {}),
 		},
 		lang,
 		merchant_code: opts.merchantCode,

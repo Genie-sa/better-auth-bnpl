@@ -350,8 +350,16 @@ function mapCheckoutResponse(
 }
 export { TabbyClient } from "./client";
 export type { TabbyClientConfig, TabbyEnvironment } from "./client";
+export {
+	tabbyCheckoutCreationOrderHistorySchema,
+	tabbyCheckoutDataSchema,
+	tabbyEducationAttachmentSchema,
+} from "./schemas";
 export type {
+	TabbyCheckoutCreationOrderHistory,
+	TabbyCheckoutData,
 	TabbyDeleteWebhookResponse,
+	TabbyEducationAttachment,
 	TabbyListWebhooksResponse,
 	TabbyRegisterWebhookRequest,
 	TabbyUpdateWebhookRequest,

@@ -72,6 +72,8 @@ export interface BnplCheckoutInput {
 	isMobile?: boolean;
 	metadata?: Record<string, unknown>;
 	additionalData?: Record<string, unknown>;
+	/** Trusted, server-resolved data interpreted and validated by the selected provider adapter. */
+	providerData?: unknown;
 	merchantUrl: BnplMerchantUrls;
 }
 interface BnplCheckoutResultBase {

@@ -2,6 +2,8 @@ import { z } from "zod";
 import { absoluteUrlMax1024Schema, absoluteUrlSchema } from "../../core/url";
 const nonEmptyStringSchema = z.string().min(1);
 const decimalStringSchema = z.string().min(1);
+const nonNegativeDecimalStringSchema = z.string().regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/);
+const dateTimeSchema = z.string().datetime({ offset: true });
 export const tabbyWebhookHeaderSchema = z.object({
 	title: nonEmptyStringSchema,
 	value: nonEmptyStringSchema,
@@ -45,14 +47,99 @@ export const tabbyOrderRequestSchema = z.object({
 	items: z.array(tabbyOrderItemRequestSchema).min(1),
 	updated_at: z.string().optional(),
 });
-export const tabbyBuyerHistoryRequestSchema = z.object({
-	registered_since: z.string().optional(),
-	loyalty_level: z.number().optional(),
-	wishlist_count: z.number().optional(),
-	is_phone_number_verified: z.boolean().optional(),
-	is_email_verified: z.boolean().optional(),
-	is_social_networks_connected: z.boolean().optional(),
-});
+export const tabbyBuyerHistoryRequestSchema = z
+	.object({
+		registered_since: dateTimeSchema,
+		loyalty_level: z.number().nonnegative(),
+		wishlist_count: z.number().int().nonnegative().optional(),
+		is_phone_number_verified: z.boolean().optional(),
+		is_email_verified: z.boolean().optional(),
+		is_social_networks_connected: z.boolean().optional(),
+	})
+	.strict();
+const tabbyHistoryBuyerSchema = z
+	.object({
+		name: nonEmptyStringSchema,
+		email: z.string().email(),
+		phone: nonEmptyStringSchema,
+		dob: z.string().date().optional(),
+	})
+	.strict();
+const tabbyHistoryShippingAddressSchema = z
+	.object({
+		address: nonEmptyStringSchema,
+		city: nonEmptyStringSchema,
+		zip: nonEmptyStringSchema,
+	})
+	.strict();
+const tabbyOrderItemHistorySchema = z
+	.object({
+		reference_id: z.string().optional(),
+		title: z.string().optional(),
+		description: z.string().optional(),
+		quantity: z.number().positive(),
+		unit_price: nonNegativeDecimalStringSchema,
+		discount_amount: nonNegativeDecimalStringSchema,
+		image_url: absoluteUrlMax1024Schema.optional(),
+		product_url: absoluteUrlMax1024Schema.optional(),
+		gender: z.enum(["Male", "Female", "Kids", "Other"]).optional(),
+		category: z.string().optional(),
+		color: z.string().optional(),
+		product_material: z.string().optional(),
+		size_type: z.string().optional(),
+		size: z.string().optional(),
+		brand: z.string().optional(),
+		is_refundable: z.boolean().optional(),
+		barcode: z.string().optional(),
+		ppn: z.string().optional(),
+		seller: z.string().optional(),
+	})
+	.strict();
+export const tabbyCheckoutCreationOrderHistorySchema = z
+	.object({
+		purchased_at: dateTimeSchema,
+		amount: nonNegativeDecimalStringSchema,
+		payment_method: z.enum(["card", "cod"]).optional(),
+		status: z.enum(["new", "processing", "complete", "refunded", "canceled", "unknown"]),
+		buyer: tabbyHistoryBuyerSchema,
+		shipping_address: tabbyHistoryShippingAddressSchema,
+		items: z.array(tabbyOrderItemHistorySchema).optional(),
+	})
+	.strict();
+export const tabbyEducationAttachmentSchema = z
+	.object({
+		body: z
+			.object({
+				education_details: z
+					.object({
+						merchant_subtype: z.enum(["formal_education", "courses_training"]),
+						program: z
+							.object({
+								payment_tenure_months: z.number().int().nonnegative(),
+								months_to_completion: z.number().int().nonnegative(),
+							})
+							.strict(),
+						student_history: z
+							.object({
+								late_payments_count: z.number().int().nonnegative(),
+								avg_overdue_duration_days: z.number().nonnegative(),
+								observation_window_months: z.number().int().nonnegative().optional(),
+							})
+							.strict(),
+					})
+					.strict(),
+			})
+			.strict(),
+		content_type: z.literal("application/vnd.tabby.v1+json"),
+	})
+	.strict();
+export const tabbyCheckoutDataSchema = z
+	.object({
+		buyer_history: tabbyBuyerHistoryRequestSchema,
+		order_history: z.array(tabbyCheckoutCreationOrderHistorySchema).max(10),
+		attachment: tabbyEducationAttachmentSchema,
+	})
+	.strict();
 export const tabbyPaymentRequestSchema = z.object({
 	amount: decimalStringSchema,
 	currency: nonEmptyStringSchema,
@@ -61,7 +148,8 @@ export const tabbyPaymentRequestSchema = z.object({
 	shipping_address: tabbyShippingAddressRequestSchema,
 	order: tabbyOrderRequestSchema,
 	buyer_history: tabbyBuyerHistoryRequestSchema.optional(),
-	order_history: z.array(z.unknown()).optional(),
+	order_history: z.array(tabbyCheckoutCreationOrderHistorySchema).max(10).optional(),
+	attachment: tabbyEducationAttachmentSchema.optional(),
 	meta: z.record(z.string(), z.unknown()).optional(),
 });
 export const tabbyEligibilityPaymentRequestSchema = z.object({

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BnplCheckoutInput } from "../../../core/types";
+import type { TabbyCheckoutData } from "../../../providers/tabby";
 import {
 	fromTabbyPaymentDetails,
 	tabbyDedupKey,
@@ -40,6 +41,46 @@ const baseCheckout: BnplCheckoutInput = {
 		notification: "https://shop/api/auth/bnpl/webhooks/tabby",
 	},
 };
+const checkoutProviderData = {
+	buyer_history: {
+		registered_since: "2024-01-15T12:00:00Z",
+		loyalty_level: 2,
+		wishlist_count: 1,
+		is_phone_number_verified: true,
+		is_email_verified: true,
+	},
+	order_history: [
+		{
+			purchased_at: "2025-12-10T08:30:00+03:00",
+			amount: "250.00",
+			payment_method: "card",
+			status: "complete",
+			buyer: {
+				name: "Ali Dhamen",
+				email: "ali@example.com",
+				phone: "+971500000000",
+			},
+			shipping_address: {
+				address: "Sheikh Zayed Rd",
+				city: "Dubai",
+				zip: "00000",
+			},
+			items: [{ quantity: 1, unit_price: "250.00", discount_amount: "0.00" }],
+		},
+	],
+	attachment: {
+		body: {
+			education_details: {
+				merchant_subtype: "courses_training",
+				program: { payment_tenure_months: 0, months_to_completion: 0 },
+				student_history: { late_payments_count: 0, avg_overdue_duration_days: 0 },
+			},
+		},
+		content_type: "application/vnd.tabby.v1+json",
+	},
+} satisfies TabbyCheckoutData;
+const checkoutHistoryOrder = checkoutProviderData.order_history[0];
+if (!checkoutHistoryOrder) throw new Error("checkout history fixture is missing");
 describe("toTabbyCheckoutRequest", () => {
 	it("translates canonical input to Tabby wire shape", () => {
 		const req = toTabbyCheckoutRequest(baseCheckout, { merchantCode: "MERCHANT" });
@@ -76,6 +117,117 @@ describe("toTabbyCheckoutRequest", () => {
 			{ merchantCode: "M" },
 		);
 		expect(req.payment.shipping_address.address).toBe("Sheikh Zayed Rd, Floor 5");
+	});
+	it("validates and maps trusted checkout provider data to Tabby's payment fields", () => {
+		const req = toTabbyCheckoutRequest(
+			{ ...baseCheckout, providerData: checkoutProviderData },
+			{ merchantCode: "M" },
+		);
+		expect(req.payment.buyer_history).toEqual(checkoutProviderData.buyer_history);
+		expect(req.payment.order_history).toEqual(checkoutProviderData.order_history);
+		expect(req.payment.attachment).toEqual({
+			body: {
+				education_details: {
+					merchant_subtype: "courses_training",
+					program: { payment_tenure_months: 0, months_to_completion: 0 },
+					student_history: { late_payments_count: 0, avg_overdue_duration_days: 0 },
+				},
+			},
+			content_type: "application/vnd.tabby.v1+json",
+		});
+	});
+	it("preserves the previous payment shape when checkout provider data is absent", () => {
+		const req = toTabbyCheckoutRequest(baseCheckout, { merchantCode: "M" });
+		expect(req.payment).not.toHaveProperty("buyer_history");
+		expect(req.payment).not.toHaveProperty("order_history");
+		expect(req.payment).not.toHaveProperty("attachment");
+	});
+	it.each([
+		[
+			"registered date",
+			{
+				...checkoutProviderData,
+				buyer_history: { ...checkoutProviderData.buyer_history, registered_since: "not-a-date" },
+			},
+		],
+		[
+			"negative loyalty",
+			{
+				...checkoutProviderData,
+				buyer_history: { ...checkoutProviderData.buyer_history, loyalty_level: -1 },
+			},
+		],
+		[
+			"money",
+			{
+				...checkoutProviderData,
+				order_history: [{ ...checkoutHistoryOrder, amount: "-1.00" }],
+			},
+		],
+		[
+			"status",
+			{
+				...checkoutProviderData,
+				order_history: [{ ...checkoutHistoryOrder, status: "paid" }],
+			},
+		],
+		[
+			"buyer",
+			{
+				...checkoutProviderData,
+				order_history: [
+					{
+						...checkoutHistoryOrder,
+						buyer: { ...checkoutHistoryOrder.buyer, email: "invalid" },
+					},
+				],
+			},
+		],
+		[
+			"address",
+			{
+				...checkoutProviderData,
+				order_history: [
+					{
+						...checkoutHistoryOrder,
+						shipping_address: { address: "Road", city: "Dubai" },
+					},
+				],
+			},
+		],
+		[
+			"history limit",
+			{
+				...checkoutProviderData,
+				order_history: Array.from({ length: 11 }, () => checkoutHistoryOrder),
+			},
+		],
+		[
+			"attachment",
+			{
+				...checkoutProviderData,
+				attachment: { ...checkoutProviderData.attachment, content_type: "application/json" },
+			},
+		],
+		[
+			"fractional education month",
+			{
+				...checkoutProviderData,
+				attachment: {
+					...checkoutProviderData.attachment,
+					body: {
+						education_details: {
+							...checkoutProviderData.attachment.body.education_details,
+							program: { payment_tenure_months: 1.5, months_to_completion: 0 },
+						},
+					},
+				},
+			},
+		],
+	])("rejects invalid checkout provider data: %s", (_label, providerData) => {
+		expect(() =>
+			toTabbyCheckoutRequest({ ...baseCheckout, providerData }, { merchantCode: "M" }),
+		).toThrow("tabby: checkout providerData is invalid");
 	});
 });
 describe("tabbyStatusToCanonical", () => {

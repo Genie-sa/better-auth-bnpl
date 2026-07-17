@@ -455,6 +455,34 @@ checkout({
 
 When `resolveCheckout` is set, the `/bnpl/checkout` body becomes **relaxed**: money fields are optional. Any client-sent amounts are discarded; your resolver's return value is canonical. Same pattern, all providers.
 
+For Tabby merchants that need buyer/order history or an education attachment, return a typed
+`TabbyCheckoutData` as `providerData` from `resolveCheckout`. This value is server-only: public
+checkout bodies cannot supply it, and it is not included in checkout responses, persisted order
+metadata, or checkout callback contexts. The Tabby adapter validates it before mapping it to
+`payment.buyer_history`, `payment.order_history`, and `payment.attachment`.
+
+```ts
+import type { TabbyCheckoutData } from "better-auth-bnpl/tabby";
+
+const providerData = {
+  buyer_history: {
+    registered_since: "2024-01-15T12:00:00Z",
+    loyalty_level: 1,
+  },
+  order_history: [],
+  attachment: {
+    body: {
+      education_details: {
+        merchant_subtype: "courses_training",
+        program: { payment_tenure_months: 0, months_to_completion: 0 },
+        student_history: { late_payments_count: 0, avg_overdue_duration_days: 0 },
+      },
+    },
+    content_type: "application/vnd.tabby.v1+json",
+  },
+} satisfies TabbyCheckoutData;
+```
+
 ### Checkout options
 
 - **Sessions and anonymous users.** A session is always required — persistence and buyer mapping need a user id, so there is no guest checkout. `checkout({ authenticatedUsersOnly: false })` only permits Better Auth *anonymous-plugin* sessions (which still carry a user id); the default (`true`) rejects them with `ANONYMOUS_USER_NOT_ALLOWED`. No session at all is always a 401.
