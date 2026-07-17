@@ -7,6 +7,7 @@ import {
 	tabbyStatusToCanonical,
 	tabbyToCanonicalEvent,
 	tabbyWebhookDedupKeyForEvent,
+	toTabbyBuyer,
 	toTabbyCheckoutRequest,
 } from "../../../providers/tabby/adapter";
 import { silentLogger } from "../../_harness";
@@ -81,6 +82,34 @@ const checkoutProviderData = {
 } satisfies TabbyCheckoutData;
 const checkoutHistoryOrder = checkoutProviderData.order_history[0];
 if (!checkoutHistoryOrder) throw new Error("checkout history fixture is missing");
+describe("toTabbyBuyer", () => {
+	it("preserves a provided buyer name after trimming", () => {
+		expect(
+			toTabbyBuyer({
+				...baseCheckout.buyer,
+				firstName: " Ali",
+				lastName: "Dhamen ",
+			}),
+		).toMatchObject({
+			name: "Ali Dhamen",
+			email: "ali@example.com",
+			phone: "+971500000000",
+		});
+	});
+	it("sends an empty name when the buyer has no name", () => {
+		expect(
+			toTabbyBuyer({
+				...baseCheckout.buyer,
+				firstName: " ",
+				lastName: " ",
+			}),
+		).toMatchObject({
+			name: "",
+			email: "ali@example.com",
+			phone: "+971500000000",
+		});
+	});
+});
 describe("toTabbyCheckoutRequest", () => {
 	it("translates canonical input to Tabby wire shape", () => {
 		const req = toTabbyCheckoutRequest(baseCheckout, { merchantCode: "MERCHANT" });

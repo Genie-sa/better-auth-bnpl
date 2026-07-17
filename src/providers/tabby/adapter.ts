@@ -59,7 +59,7 @@ function readPaymentRecords(value: unknown): TabbyCaptureRecord[] {
 export function toTabbyBuyer(buyer: BnplBuyer): TabbyBuyer {
 	const fullName = `${buyer.firstName} ${buyer.lastName}`.trim();
 	return {
-		name: fullName.length > 0 ? fullName : buyer.email,
+		name: fullName,
 		email: buyer.email,
 		phone: buyer.phone,
 		dob: buyer.dateOfBirth,

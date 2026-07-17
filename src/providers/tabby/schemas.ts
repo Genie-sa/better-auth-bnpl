@@ -14,7 +14,7 @@ export const tabbyMerchantUrlsRequestSchema = z.object({
 	failure: absoluteUrlSchema,
 });
 export const tabbyBuyerRequestSchema = z.object({
-	name: nonEmptyStringSchema,
+	name: z.string(),
 	email: nonEmptyStringSchema,
 	phone: nonEmptyStringSchema,
 	dob: z.string().optional(),

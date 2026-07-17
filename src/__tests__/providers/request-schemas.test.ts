@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	tabbyBuyerRequestSchema,
 	tabbyCaptureRequestSchema,
 	tabbyCheckoutRequestSchema,
 	tabbyRefundRequestSchema,
@@ -54,6 +55,29 @@ describe("provider request schemas", () => {
 			},
 		});
 		expect(result.success).toBe(false);
+	});
+	it("allows an empty Tabby checkout buyer name without relaxing contact fields", () => {
+		expect(
+			tabbyBuyerRequestSchema.safeParse({
+				name: "",
+				email: "buyer@example.com",
+				phone: "+966500000000",
+			}).success,
+		).toBe(true);
+		expect(
+			tabbyBuyerRequestSchema.safeParse({
+				name: "",
+				email: "",
+				phone: "+966500000000",
+			}).success,
+		).toBe(false);
+		expect(
+			tabbyBuyerRequestSchema.safeParse({
+				name: "",
+				email: "buyer@example.com",
+				phone: "",
+			}).success,
+		).toBe(false);
 	});
 	it("requires Tabby capture and refund references for idempotent reconciliation", () => {
 		const invalidCapture = tabbyCaptureRequestSchema.safeParse({
