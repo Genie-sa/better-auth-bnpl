@@ -1,6 +1,6 @@
 {
 	"name": "better-auth-bnpl",
-	"version": "0.2.2",
+	"version": "0.2.3",
 	"description": "Buy-Now-Pay-Later plugin for Better Auth — unified checkout, orders, webhooks, and admin across Tabby and Tamara. Pluggable providers, end-user picker, fully type-safe.",
 	"main": "./dist/index.cjs",
 	"module": "./dist/index.js",

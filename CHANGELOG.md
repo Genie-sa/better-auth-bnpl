@@ -1,5 +1,11 @@
 # better-auth-bnpl
 
+## 0.2.3
+
+### Patch Changes
+
+- 26b346b: Allow trusted server checkout resolvers to supply validated Tabby buyer history, order history, and education attachment data without exposing it through public checkout surfaces.
+
 ## 0.2.2
 
 ### Patch Changes
