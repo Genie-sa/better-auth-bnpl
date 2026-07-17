@@ -1,5 +1,11 @@
 # better-auth-bnpl
 
+## 0.2.4
+
+### Patch Changes
+
+- deb4f6e: Send an empty name to Tabby when a buyer has not provided one instead of substituting their email address.
+
 ## 0.2.3
 
 ### Patch Changes
