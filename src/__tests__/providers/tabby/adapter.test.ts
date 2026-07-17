@@ -155,13 +155,13 @@ describe("toTabbyCheckoutRequest", () => {
 		expect(req.payment.buyer_history).toEqual(checkoutProviderData.buyer_history);
 		expect(req.payment.order_history).toEqual(checkoutProviderData.order_history);
 		expect(req.payment.attachment).toEqual({
-			body: {
+			body: JSON.stringify({
 				education_details: {
 					merchant_subtype: "courses_training",
 					program: { payment_tenure_months: 0, months_to_completion: 0 },
 					student_history: { late_payments_count: 0, avg_overdue_duration_days: 0 },
 				},
-			},
+			}),
 			content_type: "application/vnd.tabby.v1+json",
 		});
 	});

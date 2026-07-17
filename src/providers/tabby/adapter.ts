@@ -133,7 +133,10 @@ export function toTabbyCheckoutRequest(
 				? {
 						buyer_history: providerData.data.buyer_history,
 						order_history: providerData.data.order_history,
-						attachment: providerData.data.attachment,
+						attachment: {
+							...providerData.data.attachment,
+							body: JSON.stringify(providerData.data.attachment.body),
+						},
 					}
 				: {}),
 		},
