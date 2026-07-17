@@ -14,6 +14,7 @@ import { checkout } from "../plugins/checkout";
 import { options } from "../plugins/options";
 import { orders } from "../plugins/orders";
 import { webhooks } from "../plugins/webhooks";
+import type { TabbyCheckoutData } from "../providers/tabby";
 import { makeBnplTestInstance, stubProvider } from "./_harness";
 const checkoutBody = {
 	provider: "tabby",
@@ -293,6 +294,99 @@ describe("bnpl() Better Auth integration", () => {
 		});
 		expect(res.error).not.toBeNull();
 		expect(createCheckout).not.toHaveBeenCalled();
+	});
+	it("forwards only resolver-produced provider data and does not disclose it", async () => {
+		const trustedProviderData = {
+			buyer_history: {
+				registered_since: "2024-01-15T12:00:00Z",
+				loyalty_level: 1,
+			},
+			order_history: [],
+			attachment: {
+				body: {
+					education_details: {
+						merchant_subtype: "courses_training",
+						program: { payment_tenure_months: 0, months_to_completion: 0 },
+						student_history: { late_payments_count: 0, avg_overdue_duration_days: 0 },
+					},
+				},
+				content_type: "application/vnd.tabby.v1+json",
+			},
+		} satisfies TabbyCheckoutData;
+		const attackerProviderData = { secret: "attacker-provider-data" };
+		let resolverSawAttackerData = false;
+		let providerInput: BnplCheckoutInput | undefined;
+		const callbackSurfaces: unknown[] = [];
+		const provider = makeProvider({
+			async createCheckout(input) {
+				providerInput = input;
+				return {
+					providerOrderId: "ord-provider-data",
+					providerCheckoutId: "chk-provider-data",
+					checkoutUrl: "https://checkout.example.test/chk-provider-data",
+					status: "new",
+					raw: { created: true },
+				};
+			},
+		});
+		const instance = await makeBnplTestInstance([
+			bnpl({
+				providers: { tabby: provider },
+				persistOrders: true,
+				mapUserToBuyer: ({ user }) => ({
+					firstName: "Test",
+					lastName: "User",
+					email: user.email,
+					phone: "+966500000000",
+				}),
+				use: [
+					checkout({
+						resolveCheckout: ({ input }) => {
+							resolverSawAttackerData = "providerData" in input;
+							return {
+								totalAmount: { amount: "100.00", currency: "SAR" },
+								items: [
+									{
+										referenceId: "sku-1",
+										name: "Integration Item",
+										sku: "SKU1",
+										quantity: 1,
+										totalAmount: { amount: "100.00", currency: "SAR" },
+									},
+								],
+								providerData: trustedProviderData,
+							};
+						},
+						onCheckoutCreated: ({ input, canonicalRequest, checkoutResult }) => {
+							callbackSurfaces.push(input, canonicalRequest, checkoutResult);
+						},
+						onOrderPersisted: ({ record }) => {
+							callbackSurfaces.push(record);
+						},
+					}),
+					orders(),
+				],
+			}),
+		]);
+		const { headers } = await instance.signInWithTestUser();
+		const response = await instance.client.$fetch("/bnpl/checkout", {
+			method: "POST",
+			headers,
+			body: { ...checkoutBody, providerData: attackerProviderData },
+		});
+		expect(response.error).toBeNull();
+		expect(resolverSawAttackerData).toBe(false);
+		expect(providerInput?.providerData).toEqual(trustedProviderData);
+		const publicAndPersisted = JSON.stringify({
+			response: response.data,
+			database: instance.db,
+			callbacks: callbackSurfaces,
+		});
+		expect(publicAndPersisted).not.toContain("attacker-provider-data");
+		expect(publicAndPersisted).not.toContain("registered_since");
+		expect(
+			callbackSurfaces.every((surface) => !("providerData" in recordSchema.parse(surface))),
+		).toBe(true);
 	});
 	it("runs provider pre-checks through /bnpl/options without requiring a session", async () => {
 		const provider = makeProvider({

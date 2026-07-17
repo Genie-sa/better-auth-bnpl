@@ -4,7 +4,10 @@ import type {
 	tabbyBuyerHistoryRequestSchema,
 	tabbyBuyerRequestSchema,
 	tabbyCaptureRequestSchema,
+	tabbyCheckoutCreationOrderHistorySchema,
+	tabbyCheckoutDataSchema,
 	tabbyCheckoutRequestSchema,
+	tabbyEducationAttachmentSchema,
 	tabbyEligibilityCheckRequestSchema,
 	tabbyEligibilityPaymentRequestSchema,
 	tabbyMerchantUrlsRequestSchema,
@@ -27,6 +30,11 @@ export type TabbyShippingAddress = z.input<typeof tabbyShippingAddressRequestSch
 export type TabbyOrderItem = z.input<typeof tabbyOrderItemRequestSchema>;
 export type TabbyOrder = z.input<typeof tabbyOrderRequestSchema>;
 export type TabbyBuyerHistory = z.input<typeof tabbyBuyerHistoryRequestSchema>;
+export type TabbyCheckoutCreationOrderHistory = z.input<
+	typeof tabbyCheckoutCreationOrderHistorySchema
+>;
+export type TabbyEducationAttachment = z.input<typeof tabbyEducationAttachmentSchema>;
+export type TabbyCheckoutData = z.input<typeof tabbyCheckoutDataSchema>;
 export type TabbyMerchantUrls = z.input<typeof tabbyMerchantUrlsRequestSchema>;
 export type TabbyPayment = z.input<typeof tabbyPaymentRequestSchema>;
 export type TabbyCheckoutRequest = z.input<typeof tabbyCheckoutRequestSchema>;

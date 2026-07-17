@@ -61,6 +61,7 @@ const resolvedCheckoutFieldsSchema = z.object({
 	shippingAmount: moneySchema.optional(),
 	items: z.array(orderItemSchema).min(1),
 	discount: discountSchema.optional(),
+	providerData: z.unknown().optional(),
 });
 const strictSchema = z.object({
 	...sharedFields,
@@ -93,7 +94,7 @@ export type ResolvedCheckoutFields = z.infer<typeof resolvedCheckoutFieldsSchema
 export interface CheckoutCreatedContext {
 	input: CheckoutBody | CheckoutBodyRelaxed;
 	provider: BnplProvider;
-	canonicalRequest: BnplCheckoutInput;
+	canonicalRequest: Omit<BnplCheckoutInput, "providerData">;
 	checkoutResult: {
 		providerOrderId: string;
 		providerCheckoutId: string;
@@ -280,6 +281,7 @@ interface ResolvedCheckoutMoney {
 	taxAmount?: BnplMoney;
 	shippingAmount?: BnplMoney;
 	discount?: BnplDiscount;
+	providerData?: unknown;
 }
 function requireCheckoutSession(
 	session: {
@@ -352,6 +354,7 @@ async function resolveCheckoutMoney(
 		taxAmount?: BnplMoney;
 		shippingAmount?: BnplMoney;
 		discount?: BnplDiscount;
+		providerData?: unknown;
 	};
 	if (checkoutOptions.resolveCheckout) {
 		const resolvedInput = await checkoutOptions.resolveCheckout({
@@ -390,7 +393,15 @@ async function resolveCheckoutMoney(
 		taxAmount: fields.taxAmount,
 		shippingAmount: fields.shippingAmount,
 		discount: fields.discount,
+		providerData: fields.providerData,
 	};
+}
+
+function withoutProviderData({
+	providerData: _providerData,
+	...safeInput
+}: BnplCheckoutInput): Omit<BnplCheckoutInput, "providerData"> {
+	return safeInput;
 }
 async function createProviderCheckout(
 	provider: BnplProvider,
@@ -525,6 +536,7 @@ export const checkout = (checkoutOptions: CheckoutSubpluginOptions = {}) => {
 					isMobile: rawInput.isMobile,
 					metadata: rawInput.metadata,
 					additionalData: rawInput.additionalData,
+					providerData: money.providerData,
 					merchantUrl: resolveMerchantUrls(
 						rawInput,
 						checkoutOptions,
@@ -538,7 +550,7 @@ export const checkout = (checkoutOptions: CheckoutSubpluginOptions = {}) => {
 				const hookContext: CheckoutCreatedContext = {
 					input: rawInput,
 					provider,
-					canonicalRequest,
+					canonicalRequest: withoutProviderData(canonicalRequest),
 					checkoutResult: {
 						providerOrderId: result.providerOrderId,
 						providerCheckoutId: result.providerCheckoutId,

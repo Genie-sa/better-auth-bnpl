@@ -122,3 +122,11 @@ export {
 	type WebhooksSubpluginOptions,
 } from "./plugins/webhooks";
 export { admin, type AdminAuthorizer, type AdminSubpluginOptions } from "./plugins/admin";
+export {
+	tabbyCheckoutCreationOrderHistorySchema,
+	tabbyCheckoutDataSchema,
+	tabbyEducationAttachmentSchema,
+	type TabbyCheckoutCreationOrderHistory,
+	type TabbyCheckoutData,
+	type TabbyEducationAttachment,
+} from "./providers/tabby";
