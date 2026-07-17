@@ -1,5 +1,11 @@
 # better-auth-bnpl
 
+## 0.2.5
+
+### Patch Changes
+
+- b0316b4: Serialize Tabby checkout attachment bodies as JSON strings so the provider accepts and retains education data.
+
 ## 0.2.4
 
 ### Patch Changes
