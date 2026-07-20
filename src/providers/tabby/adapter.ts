@@ -120,7 +120,9 @@ export function toTabbyCheckoutRequest(
 			currency: input.totalAmount.currency,
 			description: input.description,
 			buyer: toTabbyBuyer(input.buyer),
-			shipping_address: toTabbyShippingAddress(input.shippingAddress),
+			...(input.shippingAddress
+				? { shipping_address: toTabbyShippingAddress(input.shippingAddress) }
+				: {}),
 			order: {
 				reference_id: input.orderReferenceId,
 				tax_amount: input.taxAmount?.amount,

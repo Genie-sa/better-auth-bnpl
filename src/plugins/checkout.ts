@@ -40,7 +40,7 @@ const sharedFields = {
 	orderReferenceId: z.string().optional(),
 	description: z.string().max(256),
 	buyer: buyerSchema.optional(),
-	shippingAddress: addressSchema,
+	shippingAddress: addressSchema.optional(),
 	billingAddress: addressSchema.optional(),
 	countryCode: z.string().min(2).max(2),
 	locale: localeSchema.optional(),

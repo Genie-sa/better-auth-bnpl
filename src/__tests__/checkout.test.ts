@@ -166,6 +166,16 @@ describe("checkout session contract (authenticatedUsersOnly)", () => {
 		const res = await postCheckout(auth, baseURL, cookie, checkoutBody());
 		expect(res.status).toBe(200);
 	});
+	it("permits checkout without a shipping address", async () => {
+		const { auth, baseURL, captured } = makeHarness();
+		const cookie = await signUp(auth, baseURL);
+		const { shippingAddress: _shippingAddress, ...body } = checkoutBody();
+
+		const res = await postCheckout(auth, baseURL, cookie, body);
+
+		expect(res.status).toBe(200);
+		expect(captured.canonical?.shippingAddress).toBeUndefined();
+	});
 });
 describe("notification URL basepath", () => {
 	it("builds the webhook URL under a non-default basePath", async () => {

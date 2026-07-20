@@ -98,6 +98,9 @@ export function toTamaraCheckoutRequest(
 	input: BnplCheckoutInput,
 	opts: ToTamaraCheckoutOptions = {},
 ): TamaraCheckoutRequest {
+	if (!input.shippingAddress) {
+		throw new BnplPluginError("PROVIDER_NOT_AVAILABLE", "tamara: shippingAddress is required");
+	}
 	const locale = input.locale ? LOCALE_MAP[input.locale] : opts.defaultLocale;
 	return {
 		order_reference_id: input.orderReferenceId,
