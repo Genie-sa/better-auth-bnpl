@@ -1,5 +1,11 @@
 # better-auth-bnpl
 
+## 0.2.6
+
+### Patch Changes
+
+- b06350c: Allow digital-only Tabby checkouts and order history to omit shipping addresses while retaining Tamara's shipping requirement.
+
 ## 0.2.5
 
 ### Patch Changes
