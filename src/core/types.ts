@@ -62,7 +62,7 @@ export interface BnplCheckoutInput {
 	discount?: BnplDiscount;
 	items: NonEmptyArray<BnplOrderItem>;
 	buyer: BnplBuyer;
-	shippingAddress: BnplAddress;
+	shippingAddress?: BnplAddress;
 	billingAddress?: BnplAddress;
 	countryCode: string;
 	locale?: BnplLocale;

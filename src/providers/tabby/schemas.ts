@@ -102,7 +102,7 @@ export const tabbyCheckoutCreationOrderHistorySchema = z
 		payment_method: z.enum(["card", "cod"]).optional(),
 		status: z.enum(["new", "processing", "complete", "refunded", "canceled", "unknown"]),
 		buyer: tabbyHistoryBuyerSchema,
-		shipping_address: tabbyHistoryShippingAddressSchema,
+		shipping_address: tabbyHistoryShippingAddressSchema.optional(),
 		items: z.array(tabbyOrderItemHistorySchema).optional(),
 	})
 	.strict();
@@ -151,7 +151,7 @@ export const tabbyPaymentRequestSchema = z.object({
 	currency: nonEmptyStringSchema,
 	description: z.string().optional(),
 	buyer: tabbyBuyerRequestSchema,
-	shipping_address: tabbyShippingAddressRequestSchema,
+	shipping_address: tabbyShippingAddressRequestSchema.optional(),
 	order: tabbyOrderRequestSchema,
 	buyer_history: tabbyBuyerHistoryRequestSchema.optional(),
 	order_history: z.array(tabbyCheckoutCreationOrderHistorySchema).max(10).optional(),

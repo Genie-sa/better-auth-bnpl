@@ -82,6 +82,8 @@ const checkoutProviderData = {
 } satisfies TabbyCheckoutData;
 const checkoutHistoryOrder = checkoutProviderData.order_history[0];
 if (!checkoutHistoryOrder) throw new Error("checkout history fixture is missing");
+const checkoutShippingAddress = baseCheckout.shippingAddress;
+if (!checkoutShippingAddress) throw new Error("checkout shipping fixture is missing");
 describe("toTabbyBuyer", () => {
 	it("preserves a provided buyer name after trimming", () => {
 		expect(
@@ -117,8 +119,10 @@ describe("toTabbyCheckoutRequest", () => {
 		expect(req.payment.amount).toBe("500.00");
 		expect(req.payment.currency).toBe("AED");
 		expect(req.payment.buyer.name).toBe("Ali Dhamen");
-		expect(req.payment.shipping_address.address).toBe("Sheikh Zayed Rd");
-		expect(req.payment.shipping_address.city).toBe("Dubai");
+		expect(req.payment.shipping_address).toMatchObject({
+			address: "Sheikh Zayed Rd",
+			city: "Dubai",
+		});
 		expect(req.payment.order.reference_id).toBe("ord-1");
 		expect(req.payment.order.items[0]?.title).toBe("Keyboard");
 		expect(req.payment.order.items[0]?.unit_price).toBe("500.00");
@@ -141,11 +145,11 @@ describe("toTabbyCheckoutRequest", () => {
 		const req = toTabbyCheckoutRequest(
 			{
 				...baseCheckout,
-				shippingAddress: { ...baseCheckout.shippingAddress, line2: "Floor 5" },
+				shippingAddress: { ...checkoutShippingAddress, line2: "Floor 5" },
 			},
 			{ merchantCode: "M" },
 		);
-		expect(req.payment.shipping_address.address).toBe("Sheikh Zayed Rd, Floor 5");
+		expect(req.payment.shipping_address?.address).toBe("Sheikh Zayed Rd, Floor 5");
 	});
 	it("validates and maps trusted checkout provider data to Tabby's payment fields", () => {
 		const req = toTabbyCheckoutRequest(
@@ -164,6 +168,23 @@ describe("toTabbyCheckoutRequest", () => {
 			}),
 			content_type: "application/vnd.tabby.v1+json",
 		});
+	});
+	it("accepts order history without shipping_address and omits the key", () => {
+		const { shipping_address: _shippingAddress, ...historyWithoutShipping } = checkoutHistoryOrder;
+		const { shippingAddress: _checkoutShippingAddress, ...checkoutWithoutShipping } = baseCheckout;
+		const req = toTabbyCheckoutRequest(
+			{
+				...checkoutWithoutShipping,
+				providerData: {
+					...checkoutProviderData,
+					order_history: [historyWithoutShipping],
+				},
+			},
+			{ merchantCode: "M" },
+		);
+
+		expect(req.payment.order_history?.[0]).not.toHaveProperty("shipping_address");
+		expect(JSON.stringify(req)).not.toContain('"shipping_address"');
 	});
 	it("preserves the previous payment shape when checkout provider data is absent", () => {
 		const req = toTabbyCheckoutRequest(baseCheckout, { merchantCode: "M" });

@@ -62,6 +62,17 @@ describe("toTamaraCheckoutRequest", () => {
 			"https://shop.example.com/api/auth/bnpl/webhooks/tamara",
 		);
 	});
+	it("rejects checkout without a shipping address with a typed error", () => {
+		const { shippingAddress: _shippingAddress, ...input } = baseCheckout;
+
+		expect(() => toTamaraCheckoutRequest(input)).toThrowError(
+			expect.objectContaining({
+				name: "BnplPluginError",
+				code: "PROVIDER_NOT_AVAILABLE",
+				message: "tamara: shippingAddress is required",
+			}),
+		);
+	});
 });
 describe("tamaraStatusToCanonical", () => {
 	it("passes through canonical statuses", () => {

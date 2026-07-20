@@ -384,6 +384,37 @@ describe("tabby() factory", () => {
 			expect(result.checkoutUrl).toBe("https://tabby/pay-later");
 			expect(result.providerOrderId).toBe("payment-1");
 		});
+		it("omits shipping_address from the outgoing JSON when shipping is absent", async () => {
+			let requestBody: unknown;
+			const fetch: typeof globalThis.fetch = async (_input, init) => {
+				requestBody = parseRequestBody(init?.body);
+				return new Response(
+					JSON.stringify({
+						id: "checkout-digital",
+						status: "created",
+						configuration: {
+							available_products: {
+								installments: [{ web_url: "https://tabby/digital" }],
+							},
+						},
+						payment: {
+							id: "payment-digital",
+							status: "CREATED",
+							amount: "100.00",
+							currency: "SAR",
+						},
+					}),
+					{ status: 200, headers: { "content-type": "application/json" } },
+				);
+			};
+			const provider = tabby({ ...baseConfig, fetch });
+			const { shippingAddress: _shippingAddress, ...input } = checkoutInput;
+
+			await provider.createCheckout(input, ctx);
+
+			const parsed = z.object({ payment: z.object({}).passthrough() }).parse(requestBody);
+			expect(parsed.payment).not.toHaveProperty("shipping_address");
+		});
 	});
 	describe("capture/refund references", () => {
 		it("requires operation references before calling Tabby", async () => {
