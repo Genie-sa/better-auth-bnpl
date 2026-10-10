@@ -12,16 +12,19 @@ import type {
 import type {
 	BnplAuthorizeResult,
 	BnplCancelArgs,
+	BnplCancelResult,
 	BnplCaptureArgs,
 	BnplCaptureResult,
 	BnplCheckoutInput,
 	BnplCheckoutResult,
+	BnplMoneyOperation,
 	BnplOrderState,
 	BnplPreCheckInput,
 	BnplPreCheckResult,
 	BnplRefundArgs,
 	BnplRefundResult,
 	BnplVerifyWebhookResult,
+	BnplVoidResult,
 	BnplWebhookEvent,
 } from "../../core/types";
 import type { AbsoluteUrl } from "../../core/url";
@@ -35,7 +38,7 @@ import {
 } from "./adapter";
 import { TamaraClient } from "./client";
 import { TAMARA_COUNTRY_CODES, TAMARA_CURRENCIES, type TamaraLocale } from "./constants";
-import type { TamaraAuthoriseResponse } from "./types";
+import type { TamaraAuthoriseResponse, TamaraMoney, TamaraOrderDetailsResponse } from "./types";
 import {
 	TamaraWebhookVerificationError,
 	extractTamaraToken,
@@ -48,6 +51,7 @@ export interface TamaraOptions {
 	baseUrl?: string;
 	fetch?: ProviderFetch;
 	timeoutMs?: number;
+	preCheckTimeoutMs?: number;
 	defaultLocale?: TamaraLocale;
 	replayToleranceSeconds?: number | false;
 	storeCode?: string;
@@ -113,6 +117,13 @@ export function tamara(
 		timeoutMs: options.timeoutMs,
 	});
 	const display = { ...DEFAULT_DISPLAY, ...options.display };
+	const eligibilityClient = new TamaraClient({
+		apiToken: options.apiToken,
+		environment: options.environment,
+		baseUrl: options.baseUrl,
+		fetch: options.fetch,
+		timeoutMs: options.preCheckTimeoutMs ?? 200,
+	});
 	return {
 		id: "tamara",
 		display,
@@ -152,35 +163,7 @@ export function tamara(
 			};
 		},
 		async fetchOrder(providerOrderId: string): Promise<BnplOrderState> {
-			const remote = await client.getOrder(providerOrderId);
-			const currencyRaw = remote.total_amount.currency;
-			if (!isBnplCurrency(currencyRaw)) {
-				throw new BnplProviderError(
-					"tamara",
-					`tamara returned unsupported currency: ${currencyRaw}`,
-					{ body: remote },
-				);
-			}
-			const currency: BnplCurrency = currencyRaw;
-			const totalMinor = parseAmount({ amount: remote.total_amount.amount, currency });
-			const capturedMinor = remote.captured_amount
-				? parseAmount({ amount: remote.captured_amount.amount, currency })
-				: 0;
-			const refundedMinor = remote.refunded_amount
-				? parseAmount({ amount: remote.refunded_amount.amount, currency })
-				: 0;
-			return {
-				providerOrderId: remote.order_id,
-				orderReferenceId: remote.order_reference_id,
-				status: tamaraStatusToCanonical(remote.status),
-				totalAmount:
-					typeof remote.total_amount.amount === "string"
-						? { amount: remote.total_amount.amount, currency }
-						: formatAmount(totalMinor, currency),
-				capturedAmountMinor: capturedMinor,
-				refundedAmountMinor: refundedMinor,
-				raw: remote,
-			};
+			return readTamaraOrderState(await client.getOrder(providerOrderId), providerOrderId);
 		},
 		async capture(
 			providerOrderId: string,
@@ -202,13 +185,20 @@ export function tamara(
 					tracking_url: shippingInfo.trackingUrl,
 				},
 			});
+			assertResponseOrderId(response.order_id, providerOrderId, response);
+			const amountMinor = readOperationAmount(
+				response.captured_amount,
+				args.totalAmount,
+				"captured_amount",
+				response,
+			);
 			ctx.logger.info(
 				`tamara: captured ${args.totalAmount.amount} ${args.totalAmount.currency} for ${providerOrderId} (capture_id=${response.capture_id})`,
 			);
 			return {
 				captureId: response.capture_id,
 				providerOrderId: response.order_id,
-				amountMinor: parseAmount(args.totalAmount),
+				amountMinor,
 				raw: response,
 			};
 		},
@@ -218,25 +208,89 @@ export function tamara(
 				comment: args.comment ?? "Refund",
 				merchant_refund_id: args.merchantRefundId,
 			});
+			assertResponseOrderId(response.order_id, providerOrderId, response);
+			const requestedMinor = parseAmount(args.totalAmount);
+			let amountMinor = readResponseMoney(
+				response.refunded_amount,
+				args.totalAmount.currency,
+				"refunded_amount",
+				response,
+			);
+			if (amountMinor !== requestedMinor) {
+				const snapshot = readTamaraOrderState(
+					await client.getOrder(providerOrderId),
+					providerOrderId,
+				);
+				const refund = snapshot.operations?.find(
+					(operation) => operation.kind === "refunded" && operation.id === response.refund_id,
+				);
+				if (
+					!refund ||
+					refund.amountMinor !== requestedMinor ||
+					refund.currency !== args.totalAmount.currency
+				)
+					throw new BnplProviderError(
+						"tamara",
+						"Tamara refund response could not be corroborated with its native transaction",
+						{ body: response },
+					);
+				amountMinor = refund.amountMinor;
+			}
 			return {
 				refundId: response.refund_id,
 				providerOrderId: response.order_id,
-				amountMinor: parseAmount(args.totalAmount),
+				amountMinor,
 				raw: response,
 			};
 		},
-		async cancel(providerOrderId: string, args: TamaraCancelArgs): Promise<void> {
+		async cancel(providerOrderId: string, args: TamaraCancelArgs): Promise<BnplCancelResult> {
 			const totalAmount = requireTamaraCancelAmount(args.totalAmount);
-			await client.cancelOrder(providerOrderId, {
+			const response = await client.cancelOrder(providerOrderId, {
 				total_amount: totalAmount,
 				shipping_amount: args.shippingAmount,
 				tax_amount: args.taxAmount,
 				discount_amount: args.discountAmount,
 				items: args.items?.map(toTamaraItem),
 			});
+			assertResponseOrderId(response.order_id, providerOrderId, response);
+			const requestedMinor = parseAmount(totalAmount);
+			let amountMinor = readResponseMoney(
+				response.canceled_amount,
+				totalAmount.currency,
+				"canceled_amount",
+				response,
+			);
+			if (amountMinor !== requestedMinor) {
+				const snapshot = readTamaraOrderState(
+					await client.getOrder(providerOrderId),
+					providerOrderId,
+				);
+				const cancellation = snapshot.operations?.find(
+					(operation) => operation.kind === "canceled" && operation.id === response.cancel_id,
+				);
+				if (
+					!cancellation ||
+					cancellation.amountMinor !== requestedMinor ||
+					cancellation.currency !== totalAmount.currency
+				)
+					throw new BnplProviderError(
+						"tamara",
+						"Tamara cancellation response could not be corroborated with its native transaction",
+						{ body: response },
+					);
+				amountMinor = cancellation.amountMinor;
+			}
+			return {
+				providerOrderId: response.order_id,
+				status: response.status,
+				cancelId: response.cancel_id,
+				amountMinor,
+				raw: response,
+			};
 		},
 		async authorize(providerOrderId: string): Promise<BnplAuthorizeResult> {
 			const response = await client.authoriseOrder(providerOrderId);
+			assertResponseOrderId(response.order_id, providerOrderId, response);
 			const status = tamaraStatusToCanonical(response.status);
 			const autoCapture = readTamaraAutoCapture(response, status);
 			return {
@@ -246,11 +300,22 @@ export function tamara(
 				raw: response,
 			};
 		},
-		async voidCheckout(checkoutId: string, providerOrderId: string): Promise<void> {
-			await client.voidCheckoutSession(checkoutId, {
+		async voidCheckout(checkoutId: string, providerOrderId: string): Promise<BnplVoidResult> {
+			const response = await client.voidCheckoutSession(checkoutId, {
 				order_id: providerOrderId,
 				store_code: options.storeCode,
 			});
+			return {
+				voided: response.order_was_voided,
+				capturedAmountMinor: response.captured_amount
+					? readResponseMoney(response.captured_amount, undefined, "captured_amount", response)
+					: undefined,
+				capturedCurrency:
+					response.captured_amount && isBnplCurrency(response.captured_amount.currency)
+						? response.captured_amount.currency
+						: undefined,
+				raw: response,
+			};
 		},
 		async verifyWebhook(req: WebhookRequest): Promise<BnplVerifyWebhookResult> {
 			const token = extractTamaraToken(req);
@@ -292,26 +357,22 @@ export function tamara(
 			return tamaraToCanonicalEvent(payload);
 		},
 		async preCheck(input: BnplPreCheckInput): Promise<BnplPreCheckResult> {
-			if (!input.phone) {
-				return {
-					available: false,
-					reason: "phone_required",
-				};
-			}
 			if (!isOneOf(input.countryCode, TAMARA_COUNTRY_CODES)) {
 				return {
 					available: false,
 					reason: "unsupported_country",
 				};
 			}
+			if (!input.phone) return { available: true };
 			try {
-				const response = await client.preCheckoutEligibility({
+				const response = await eligibilityClient.preCheckoutEligibility({
 					order: {
 						amount: Number(formatAmount(parseAmount(input.amount), input.amount.currency).amount),
 						currency: input.amount.currency,
 					},
 					customer: {
-						phone: input.phone,
+						phone_number: input.phone,
+						email: input.email,
 					},
 				});
 				return {
@@ -319,12 +380,52 @@ export function tamara(
 				};
 			} catch (e) {
 				if (e instanceof BnplProviderError) {
-					return { available: false, reason: e.message };
+					return { available: true, reason: "eligibility_check_unavailable" };
 				}
 				throw e;
 			}
 		},
 	};
+}
+function assertResponseOrderId(actual: string, expected: string, body: unknown): void {
+	if (actual !== expected)
+		throw new BnplProviderError("tamara", "Tamara returned a different order ID", { body });
+}
+function readResponseMoney(
+	money: unknown,
+	currency: BnplCurrency | undefined,
+	label: string,
+	body: unknown,
+): number {
+	if (
+		!isMoneyLike(money) ||
+		!isBnplCurrency(money.currency) ||
+		(currency !== undefined && money.currency !== currency)
+	) {
+		throw new BnplProviderError("tamara", `Tamara returned invalid ${label} currency or amount`, {
+			body,
+		});
+	}
+	try {
+		return parseAmount(money);
+	} catch (cause) {
+		throw new BnplProviderError("tamara", `Tamara returned invalid ${label}`, { body, cause });
+	}
+}
+function readOperationAmount(
+	money: TamaraMoney,
+	requested: BnplCaptureArgs["totalAmount"],
+	label: string,
+	body: unknown,
+): number {
+	const amountMinor = readResponseMoney(money, requested.currency, label, body);
+	if (amountMinor !== parseAmount(requested))
+		throw new BnplProviderError(
+			"tamara",
+			`Tamara returned ${label} different from the requested amount`,
+			{ body },
+		);
+	return amountMinor;
 }
 function readTamaraAutoCapture(
 	response: TamaraAuthoriseResponse,
@@ -333,14 +434,22 @@ function readTamaraAutoCapture(
 	const autoCaptured = response.auto_captured === true || status === "fully_captured";
 	if (!autoCaptured) return {};
 	const captureId = typeof response.capture_id === "string" ? response.capture_id : undefined;
-	const authorizedAmount = response.authorized_amount;
-	const capturedAmountMinor =
-		isMoneyLike(authorizedAmount) && isBnplCurrency(authorizedAmount.currency)
-			? parseAmount(authorizedAmount)
-			: undefined;
+	if (!captureId?.trim()) {
+		throw new BnplProviderError(
+			"tamara",
+			"Tamara auto-capture response is missing its capture ID",
+			{ body: response },
+		);
+	}
+	const capturedAmountMinor = readResponseMoney(
+		response.authorized_amount,
+		undefined,
+		"authorized_amount",
+		response,
+	);
 	return {
 		autoCaptured: true,
-		captureId: captureId || undefined,
+		captureId,
 		capturedAmountMinor,
 	};
 }
@@ -360,8 +469,161 @@ export type {
 } from "./constants";
 export type {
 	TamaraRegisterWebhookRequest,
+	TamaraProviderData,
+	TamaraRiskAssessment,
 	TamaraUpdateReferenceIdResponse,
 	TamaraUpdateWebhookRequest,
 	TamaraWebhookDetails,
 	TamaraWebhookRegistrationResponse,
 } from "./types";
+
+function readTamaraOrderState(
+	remote: TamaraOrderDetailsResponse,
+	providerOrderId: string,
+): BnplOrderState {
+	assertResponseOrderId(remote.order_id, providerOrderId, remote);
+	const status = tamaraStatusToCanonical(remote.status);
+	const currencyRaw = remote.total_amount.currency;
+	if (!isBnplCurrency(currencyRaw)) {
+		throw new BnplProviderError("tamara", `tamara returned unsupported currency: ${currencyRaw}`, {
+			body: remote,
+		});
+	}
+	const currency: BnplCurrency = currencyRaw;
+	const totalMinor = readResponseMoney(remote.total_amount, currency, "total_amount", remote);
+	const hasFinancialActivity =
+		status === "partially_captured" ||
+		status === "fully_captured" ||
+		status === "partially_refunded" ||
+		status === "fully_refunded" ||
+		status === "updated" ||
+		status === "canceled";
+	const hasRefunds = status === "partially_refunded" || status === "fully_refunded";
+	if (
+		(!remote.captured_amount && hasFinancialActivity) ||
+		(!remote.refunded_amount && (hasRefunds || status === "updated" || status === "canceled"))
+	) {
+		throw new BnplProviderError(
+			"tamara",
+			"Tamara order snapshot is missing required financial totals",
+			{ body: remote },
+		);
+	}
+	const capturedMinor = remote.captured_amount
+		? readResponseMoney(remote.captured_amount, currency, "captured_amount", remote)
+		: 0;
+	const refundedMinor = remote.refunded_amount
+		? readResponseMoney(remote.refunded_amount, currency, "refunded_amount", remote)
+		: 0;
+	const canceledMinor = remote.canceled_amount
+		? readResponseMoney(remote.canceled_amount, currency, "canceled_amount", remote)
+		: undefined;
+	if (capturedMinor + (canceledMinor ?? 0) > totalMinor || refundedMinor > capturedMinor) {
+		throw new BnplProviderError(
+			"tamara",
+			"Tamara order snapshot has inconsistent financial totals",
+			{ body: remote },
+		);
+	}
+	if ((canceledMinor ?? 0) > 0 && !remote.transactions?.cancels)
+		throw new BnplProviderError("tamara", "Tamara order snapshot is missing cancellation history", {
+			body: remote,
+		});
+	let operations: BnplMoneyOperation[] | undefined;
+	if (remote.transactions) {
+		operations = [];
+		const captures = new Map<string, number>();
+		const refunds = new Set<string>();
+		const refundedByCapture = new Map<string, number>();
+		let capturedSum = 0;
+		let refundedSum = 0;
+		const invalidHistory = () => {
+			throw new BnplProviderError("tamara", "Tamara order transaction history is inconsistent", {
+				body: remote,
+			});
+		};
+		for (const capture of remote.transactions.captures) {
+			if (
+				captures.has(capture.capture_id) ||
+				(capture.order_id && capture.order_id !== remote.order_id)
+			)
+				invalidHistory();
+			const amountMinor = readResponseMoney(
+				capture.total_amount,
+				currency,
+				"capture.total_amount",
+				remote,
+			);
+			if (amountMinor <= 0) invalidHistory();
+			if (
+				capture.refunded_amount &&
+				readResponseMoney(capture.refunded_amount, currency, "capture.refunded_amount", remote) >
+					amountMinor
+			)
+				invalidHistory();
+			captures.set(capture.capture_id, amountMinor);
+			capturedSum += amountMinor;
+			operations.push({ kind: "captured", id: capture.capture_id, amountMinor, currency });
+		}
+		for (const refund of remote.transactions.refunds) {
+			if (refunds.has(refund.refund_id) || !captures.has(refund.capture_id)) invalidHistory();
+			refunds.add(refund.refund_id);
+			const amountMinor = readResponseMoney(
+				refund.total_amount,
+				currency,
+				"refund.total_amount",
+				remote,
+			);
+			if (amountMinor <= 0) invalidHistory();
+			if (refund.refund_status !== "success") continue;
+			const captureRefunds = (refundedByCapture.get(refund.capture_id) ?? 0) + amountMinor;
+			if (
+				!Number.isSafeInteger(captureRefunds) ||
+				captureRefunds > (captures.get(refund.capture_id) ?? 0)
+			)
+				invalidHistory();
+			refundedByCapture.set(refund.capture_id, captureRefunds);
+			refundedSum += amountMinor;
+			operations.push({ kind: "refunded", id: refund.refund_id, amountMinor, currency });
+		}
+		const cancels = new Set<string>();
+		let canceledSum = 0;
+		for (const cancel of remote.transactions.cancels ?? []) {
+			if (cancels.has(cancel.cancel_id) || (cancel.order_id && cancel.order_id !== remote.order_id))
+				invalidHistory();
+			cancels.add(cancel.cancel_id);
+			const amountMinor = readResponseMoney(
+				cancel.total_amount,
+				currency,
+				"cancel.total_amount",
+				remote,
+			);
+			if (amountMinor <= 0) invalidHistory();
+			canceledSum += amountMinor;
+			operations.push({ kind: "canceled", id: cancel.cancel_id, amountMinor, currency });
+		}
+		if (
+			!Number.isSafeInteger(capturedSum) ||
+			!Number.isSafeInteger(refundedSum) ||
+			!Number.isSafeInteger(canceledSum) ||
+			canceledSum !== (canceledMinor ?? 0) ||
+			capturedSum !== capturedMinor ||
+			refundedSum !== refundedMinor
+		)
+			invalidHistory();
+	}
+	return {
+		providerOrderId: remote.order_id,
+		orderReferenceId: remote.order_reference_id,
+		status,
+		totalAmount:
+			typeof remote.total_amount.amount === "string"
+				? { amount: remote.total_amount.amount, currency }
+				: formatAmount(totalMinor, currency),
+		capturedAmountMinor: capturedMinor,
+		refundedAmountMinor: refundedMinor,
+		...(canceledMinor !== undefined ? { canceledAmountMinor: canceledMinor } : {}),
+		...(operations ? { operations } : {}),
+		raw: remote,
+	};
+}

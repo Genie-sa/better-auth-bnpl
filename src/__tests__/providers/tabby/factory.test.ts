@@ -40,7 +40,7 @@ describe("tabby() factory", () => {
 		expect(provider.capabilities.separateAuthorise).toBe(false);
 		expect(provider.capabilities.voidCheckout).toBe(false);
 		expect(provider.capabilities.closePayment).toBe(true);
-		expect(provider.capabilities.disputes).toBe(true);
+		expect(provider.capabilities.disputes).toBe(false);
 	});
 	it("supports SAR/AED/KWD only", () => {
 		const provider = tabby(baseConfig);
@@ -439,7 +439,7 @@ describe("tabby() factory", () => {
 							status: "AUTHORIZED",
 							amount: "100.00",
 							currency: "SAR",
-							captures: [{ id: "cap-1", amount: "25.00" }],
+							captures: [{ id: "cap-1", amount: "25.00", reference_id: "cap-ref-1" }],
 							refunds: [],
 						}),
 						{ status: 200, headers: { "content-type": "application/json" } },
@@ -453,8 +453,8 @@ describe("tabby() factory", () => {
 							status: "CLOSED",
 							amount: "100.00",
 							currency: "SAR",
-							captures: [{ id: "cap-1", amount: "25.00" }],
-							refunds: [{ id: "rfd-1", amount: "5.00" }],
+							captures: [{ id: "cap-1", amount: "25.00", reference_id: "cap-ref-1" }],
+							refunds: [{ id: "rfd-1", amount: "5.00", reference_id: "rfd-ref-1" }],
 						}),
 						{ status: 200, headers: { "content-type": "application/json" } },
 					);

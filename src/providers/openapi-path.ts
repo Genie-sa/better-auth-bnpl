@@ -16,9 +16,16 @@ function renderOpenApiPath(path: string, params?: Record<string, OpenApiPathPara
 	let rendered = path;
 	if (params === undefined) return rendered;
 	for (const [name, value] of Object.entries(params)) {
-		rendered = rendered.replace(`{${name}}`, encodeURIComponent(String(value)));
+		rendered = rendered.replace(`{${name}}`, encodeProviderResourceId(value));
 	}
 	return rendered;
+}
+export function encodeProviderResourceId(value: OpenApiPathParamValue): string {
+	const id = String(value);
+	if (!id.trim() || id === "." || id === "..") {
+		throw new Error("bnpl: provider resource ID must be nonempty and cannot be a dot segment");
+	}
+	return encodeURIComponent(id);
 }
 export function createOpenApiPathBuilder<TPaths>() {
 	return <

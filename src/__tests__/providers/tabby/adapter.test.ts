@@ -151,6 +151,14 @@ describe("toTabbyCheckoutRequest", () => {
 		);
 		expect(req.payment.shipping_address?.address).toBe("Sheikh Zayed Rd, Floor 5");
 	});
+	it("maps buyer history independently of education attachments", () => {
+		const req = toTabbyCheckoutRequest(
+			{ ...baseCheckout, providerData: { buyer_history: checkoutProviderData.buyer_history } },
+			{ merchantCode: "M" },
+		);
+		expect(req.payment.buyer_history).toEqual(checkoutProviderData.buyer_history);
+		expect(req.payment).not.toHaveProperty("attachment");
+	});
 	it("validates and maps trusted checkout provider data to Tabby's payment fields", () => {
 		const req = toTabbyCheckoutRequest(
 			{ ...baseCheckout, providerData: checkoutProviderData },
@@ -305,11 +313,15 @@ describe("tabbyStatusToCanonical", () => {
 		expect(tabbyStatusToCanonical("authorized", 50000, 0, 0)).toBe("authorised");
 		expect(tabbyStatusToCanonical("closed", 50000, 50000, 0)).toBe("fully_captured");
 	});
-	it("falls back to `new` with a warn for statuses outside the documented enum", () => {
+	it("rejects statuses outside the documented enum without inventing a state", () => {
 		const warnings: string[] = [];
 		const logger = { warn: (msg: string) => warnings.push(msg) };
-		expect(tabbyStatusToCanonical("CAPTURED", 50000, 50000, 0, logger)).toBe("new");
-		expect(tabbyStatusToCanonical("SOMETHING_NEW", 50000, 0, 0, logger)).toBe("new");
+		expect(() => tabbyStatusToCanonical("CAPTURED", 50000, 50000, 0, logger)).toThrow(
+			"unknown payment status",
+		);
+		expect(() => tabbyStatusToCanonical("SOMETHING_NEW", 50000, 0, 0, logger)).toThrow(
+			"unknown payment status",
+		);
 		expect(warnings).toHaveLength(2);
 		expect(warnings[0]).toMatch(/unknown payment status "CAPTURED"/);
 	});

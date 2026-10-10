@@ -2,6 +2,7 @@ import type { BnplCurrency } from "./money";
 import type {
 	BnplAuthorizeResult,
 	BnplCancelArgs,
+	BnplCancelResult,
 	BnplCaptureArgs,
 	BnplCaptureResult,
 	BnplCheckoutInput,
@@ -12,7 +13,9 @@ import type {
 	BnplRefundArgs,
 	BnplRefundResult,
 	BnplVerifyWebhookResult,
+	BnplVoidResult,
 	BnplWebhookEvent,
+	OptionalProviderResult,
 } from "./types";
 import type { AbsoluteUrl } from "./url";
 export interface ProviderLogger {
@@ -68,13 +71,22 @@ export interface BnplProvider<
 		args: RefundArgs,
 		ctx: ProviderContext,
 	): Promise<BnplRefundResult>;
-	cancel(providerOrderId: string, args: CancelArgs, ctx: ProviderContext): Promise<void>;
+	cancel(
+		providerOrderId: string,
+		args: CancelArgs,
+		ctx: ProviderContext,
+	): Promise<OptionalProviderResult<BnplCancelResult>>;
 	verifyWebhook(req: WebhookRequest): Promise<BnplVerifyWebhookResult>;
 	webhookDedupKey?(event: BnplWebhookEvent): string;
 	toCanonicalEvent(payload: Record<string, unknown>): BnplWebhookEvent | null;
+	toCanonicalEvents?(payload: Record<string, unknown>): BnplWebhookEvent[];
 	preCheck(input: BnplPreCheckInput, ctx: ProviderContext): Promise<BnplPreCheckResult>;
 	authorize?(providerOrderId: string, ctx: ProviderContext): Promise<BnplAuthorizeResult>;
-	voidCheckout?(checkoutId: string, providerOrderId: string, ctx: ProviderContext): Promise<void>;
+	voidCheckout?(
+		checkoutId: string,
+		providerOrderId: string,
+		ctx: ProviderContext,
+	): Promise<OptionalProviderResult<BnplVoidResult>>;
 	closePayment?(providerPaymentId: string, ctx: ProviderContext): Promise<void>;
 }
 export type ProviderIds<P extends Record<string, BnplProvider>> = keyof P & string;

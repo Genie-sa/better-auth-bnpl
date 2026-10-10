@@ -33,8 +33,21 @@ export function verifyTamaraJwt(token: string, notificationToken: string): Verif
 	if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
 		throw new TamaraWebhookVerificationError("Invalid JWT signature");
 	}
-	if (typeof payload.exp === "number" && payload.exp * 1000 < Date.now()) {
+	for (const claim of ["exp", "iat", "nbf"] as const) {
+		if (
+			claim in payload &&
+			(typeof payload[claim] !== "number" || !Number.isFinite(payload[claim]) || payload[claim] < 0)
+		) {
+			throw new TamaraWebhookVerificationError(
+				`Invalid JWT ${claim}: expected a nonnegative NumericDate`,
+			);
+		}
+	}
+	if (typeof payload.exp === "number" && payload.exp <= Date.now() / 1000) {
 		throw new TamaraWebhookVerificationError("JWT expired");
+	}
+	if (typeof payload.nbf === "number" && payload.nbf > Date.now() / 1000) {
+		throw new TamaraWebhookVerificationError("JWT not yet valid");
 	}
 	if (payload.iss !== "Tamara") {
 		throw new TamaraWebhookVerificationError(

@@ -132,6 +132,27 @@ export interface BnplCancelArgs {
 	merchantReferenceId?: string;
 	comment?: string;
 }
+export interface BnplCancelResult {
+	providerOrderId: string;
+	status: CanonicalStatus;
+	cancelId?: string;
+	amountMinor?: number;
+	raw: unknown;
+}
+export interface BnplVoidResult {
+	voided: boolean;
+	capturedAmountMinor?: number;
+	capturedCurrency?: BnplCurrency;
+	raw: unknown;
+}
+// biome-ignore lint/suspicious/noConfusingVoidType: custom providers historically return Promise<void> for cancel and void.
+export type OptionalProviderResult<Result> = Result | void;
+export interface BnplMoneyOperation {
+	id: string;
+	kind: "captured" | "refunded" | "canceled";
+	amountMinor: number;
+	currency: BnplCurrency;
+}
 export interface BnplAuthorizeResult {
 	providerOrderId: string;
 	status: CanonicalStatus;
@@ -147,6 +168,8 @@ export interface BnplOrderState {
 	totalAmount: BnplMoney;
 	capturedAmountMinor: number;
 	refundedAmountMinor: number;
+	canceledAmountMinor?: number;
+	operations?: BnplMoneyOperation[];
 	raw: unknown;
 }
 export interface BnplPersistedOrder {
@@ -164,6 +187,7 @@ export interface BnplPersistedOrder {
 	capturedAmountMinor: number;
 	canceledAt?: Date | string | null;
 	refundedAmountMinor: number;
+	canceledAmountMinor?: number;
 	rawData?: string;
 	metadata?: string;
 	createdAt: Date | string;
@@ -245,6 +269,9 @@ export type BnplWebhookEvent =
 			kind: "updated";
 			provider: string;
 			orderId: string;
+			status?: CanonicalStatus;
+			orderReferenceId?: string;
+			totalAmount?: BnplMoney;
 			raw: unknown;
 	  }
 	| {

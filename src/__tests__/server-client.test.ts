@@ -352,3 +352,46 @@ describe("createBnplClient", () => {
 		}
 	});
 });
+
+describe("server-client provider namespace configuration", () => {
+	it.each([
+		"options",
+		"createCheckout",
+		"fetchOrder",
+		"capture",
+		"refund",
+		"cancel",
+		"authorize",
+		"preCheck",
+		"provider",
+		"__proto__",
+		"constructor",
+		"toString",
+	])("rejects reserved provider namespace %s during construction", (id) => {
+		const providers = Object.fromEntries([[id, stubProvider(id)]]);
+		expect(() => createBnplClient({ providers })).toThrow(/reserved/);
+	});
+	it("dispatches an ordinary custom provider through direct and explicit namespaces", async () => {
+		const calls: string[] = [];
+		const custom = stubProvider("custom", {
+			async capture(providerOrderId) {
+				calls.push(providerOrderId);
+				return { providerOrderId, captureId: "capture-1", amountMinor: 10000, raw: {} };
+			},
+		});
+		const client = createBnplClient({ providers: { custom } });
+		const args = { totalAmount: checkoutInput.totalAmount };
+		await client.custom.capture("direct", args);
+		await client.provider("custom").capture("explicit", args);
+		await client.capture("custom", "generic", args);
+		expect(calls).toEqual(["direct", "explicit", "generic"]);
+	});
+	it.each(["constructor", "toString", "__proto__"])(
+		"rejects inherited object properties as unconfigured provider %s",
+		(id) => {
+			const providers: Record<string, BnplProvider> = { custom: stubProvider("custom") };
+			const client = createBnplClient({ providers });
+			expect(() => client.provider(id)).toThrow(/not configured/);
+		},
+	);
+});

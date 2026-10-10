@@ -54,7 +54,7 @@ async function makeAdminInstance(
 			use: [admin({ isAuthorized })],
 		}),
 	]);
-	seedOrderRow(instance);
+	seedOrderRow(instance, { provider: provider.id });
 	const { headers } = await instance.signInWithTestUser();
 	return { instance, headers };
 }
@@ -71,6 +71,160 @@ function post(
 	});
 }
 describe("admin order operations", () => {
+	it("refuses to import unidentifiable remote money operations", async () => {
+		const provider = stubProvider("tabby", {
+			fetchOrder: async () => ({
+				providerOrderId: ORDER_ID,
+				status: "partially_captured",
+				totalAmount: { amount: "100.00", currency: "SAR" },
+				capturedAmountMinor: 4000,
+				refundedAmountMinor: 0,
+				raw: {},
+			}),
+		});
+		const { instance, headers } = await makeAdminInstance(provider);
+		expect((await post(instance, headers, "reconcile")).error).not.toBeNull();
+		expect(orderRow(instance).capturedAmountMinor).toBe(0);
+	});
+	it("imports native operation identities with reconciled balances", async () => {
+		const provider = stubProvider("tabby", {
+			fetchOrder: async () => ({
+				providerOrderId: ORDER_ID,
+				status: "partially_captured",
+				totalAmount: { amount: "100.00", currency: "SAR" },
+				capturedAmountMinor: 4000,
+				refundedAmountMinor: 0,
+				operations: [{ id: "historic", kind: "captured", amountMinor: 4000, currency: "SAR" }],
+				raw: {},
+			}),
+			capture: async () => ({
+				providerOrderId: ORDER_ID,
+				captureId: "historic",
+				amountMinor: 4000,
+				raw: {},
+			}),
+		});
+		const { instance, headers } = await makeAdminInstance(provider);
+		expect((await post(instance, headers, "reconcile")).error).toBeNull();
+		expect(
+			(
+				await post(instance, headers, "capture", {
+					totalAmount: { amount: "40.00", currency: "SAR" },
+					merchantReferenceId: "historic-command",
+				})
+			).error,
+		).toBeNull();
+		expect(orderRow(instance).capturedAmountMinor).toBe(4000);
+	});
+	it("counts an idempotent capture response only once", async () => {
+		const provider = stubProvider("tabby", {
+			capture: async () => ({
+				providerOrderId: ORDER_ID,
+				captureId: "same-capture",
+				amountMinor: 1000,
+				raw: {},
+			}),
+		});
+		const { instance, headers } = await makeAdminInstance(provider);
+		const body = {
+			totalAmount: { amount: "10.00", currency: "SAR" },
+			merchantReferenceId: "stable-request",
+		};
+		expect((await post(instance, headers, "capture", body)).error).toBeNull();
+		expect((await post(instance, headers, "capture", body)).error).toBeNull();
+		expect(orderRow(instance).capturedAmountMinor).toBe(1000);
+	});
+	it("keeps a partially canceled order authorised", async () => {
+		const provider = stubProvider("tabby", {
+			cancel: async () => ({
+				providerOrderId: ORDER_ID,
+				status: "authorised",
+				cancelId: "partial",
+				amountMinor: 1000,
+				raw: {},
+			}),
+		});
+		const { instance, headers } = await makeAdminInstance(provider);
+		expect(
+			(
+				await post(instance, headers, "cancel", {
+					merchantReferenceId: "stable-partial-cancel",
+					totalAmount: { amount: "10.00", currency: "SAR" },
+				})
+			).error,
+		).toBeNull();
+		expect(orderRow(instance).status).toBe("authorised");
+	});
+	it("reports an unsuccessful provider void", async () => {
+		const provider = stubProvider("tabby", {
+			capabilities: capabilities({ voidCheckout: true }),
+			voidCheckout: async () => ({ voided: false, capturedAmountMinor: 1000, raw: {} }),
+		});
+		const { instance, headers } = await makeAdminInstance(provider);
+		expect((await post(instance, headers, "void", {})).data).toMatchObject({
+			voided: false,
+			capturedAmountMinor: 1000,
+		});
+	});
+	it("does not treat canceled-order authorisation errors as success", async () => {
+		const provider = stubProvider("tabby", {
+			capabilities: capabilities({ separateAuthorise: true }),
+			authorize: async () => {
+				throw new BnplProviderError("tabby", "not allowed for cancelled order", {
+					status: 400,
+					body: { message: "not allowed for cancelled order" },
+				});
+			},
+		});
+		const { instance, headers } = await makeAdminInstance(provider);
+		orderRow(instance).status = "approved";
+		expect((await post(instance, headers, "authorise")).error?.status).toBe(502);
+		expect(orderRow(instance).status).toBe("approved");
+	});
+	it("does not overwrite a capture arriving during reconciliation", async () => {
+		const provider = stubProvider("tabby", {
+			fetchOrder: async () => {
+				Object.assign(orderRow(instance), {
+					capturedAmountMinor: 1000,
+					status: "partially_captured",
+					version: 1,
+				});
+				return {
+					providerOrderId: ORDER_ID,
+					status: "authorised",
+					totalAmount: { amount: "100.00", currency: "SAR" },
+					capturedAmountMinor: 0,
+					refundedAmountMinor: 0,
+					raw: {},
+				};
+			},
+		});
+		const prepared = await makeAdminInstance(provider);
+		const instance = prepared.instance;
+		await post(instance, prepared.headers, "reconcile");
+		expect(orderRow(instance).capturedAmountMinor).toBe(1000);
+	});
+	it("uses captured funds as the full-refund denominator", async () => {
+		const provider = stubProvider("tabby", {
+			refund: async () => ({
+				providerOrderId: ORDER_ID,
+				refundId: "refund-all-captured",
+				amountMinor: 1000,
+				raw: {},
+			}),
+		});
+		const { instance, headers } = await makeAdminInstance(provider);
+		Object.assign(orderRow(instance), { status: "partially_captured", capturedAmountMinor: 1000 });
+		expect(
+			(
+				await post(instance, headers, "refund", {
+					merchantRefundId: "refund-all",
+					totalAmount: { amount: "10.00", currency: "SAR" },
+				})
+			).error,
+		).toBeNull();
+		expect(orderRow(instance).status).toBe("fully_refunded");
+	});
 	describe("authorise", () => {
 		it("rejects providers without a separate authorise step", async () => {
 			const { instance, headers } = await makeAdminInstance(stubProvider("tabby"));
@@ -104,6 +258,14 @@ describe("admin order operations", () => {
 						body: { message: "Order already authorised" },
 					});
 				},
+				fetchOrder: async () => ({
+					providerOrderId: ORDER_ID,
+					status: "authorised",
+					totalAmount: { amount: "100.00", currency: "SAR" },
+					capturedAmountMinor: 0,
+					refundedAmountMinor: 0,
+					raw: {},
+				}),
 			});
 			const { instance, headers } = await makeAdminInstance(provider);
 			orderRow(instance).status = "approved";
@@ -136,6 +298,15 @@ describe("admin order operations", () => {
 				voidCheckout: async (checkoutId, providerOrderId) => {
 					voided = { checkoutId, orderId: providerOrderId };
 				},
+				fetchOrder: async () => ({
+					providerOrderId: ORDER_ID,
+					status: "expired",
+					totalAmount: { amount: "100.00", currency: "SAR" },
+					capturedAmountMinor: 0,
+					refundedAmountMinor: 0,
+					operations: [],
+					raw: {},
+				}),
 			});
 			const { instance, headers } = await makeAdminInstance(provider);
 			const res = await post(instance, headers, "void", {});
@@ -145,6 +316,35 @@ describe("admin order operations", () => {
 		});
 	});
 	describe("close", () => {
+		it("preserves a refund committed while close awaits", async () => {
+			const provider = stubProvider("tabby", {
+				capabilities: capabilities({ closePayment: true }),
+				closePayment: async () => {
+					Object.assign(orderRow(instance), {
+						capturedAmountMinor: 10000,
+						refundedAmountMinor: 2500,
+						status: "partially_refunded",
+						version: 1,
+					});
+				},
+				fetchOrder: async () => ({
+					providerOrderId: ORDER_ID,
+					status: "partially_refunded",
+					totalAmount: { amount: "100.00", currency: "SAR" },
+					capturedAmountMinor: 10000,
+					refundedAmountMinor: 2500,
+					operations: [
+						{ id: "close-capture", kind: "captured", amountMinor: 10000, currency: "SAR" },
+						{ id: "close-refund", kind: "refunded", amountMinor: 2500, currency: "SAR" },
+					],
+					raw: { status: "CLOSED" },
+				}),
+			});
+			const prepared = await makeAdminInstance(provider);
+			const instance = prepared.instance;
+			expect((await post(instance, prepared.headers, "close")).error).toBeNull();
+			expect(orderRow(instance).status).toBe("partially_refunded");
+		});
 		it("rejects providers without close support", async () => {
 			const { instance, headers } = await makeAdminInstance(stubProvider("tabby"));
 			const res = await post(instance, headers, "close");
@@ -157,6 +357,17 @@ describe("admin order operations", () => {
 				closePayment: async (providerPaymentId) => {
 					closedPaymentId = providerPaymentId;
 				},
+				fetchOrder: async () => ({
+					providerOrderId: ORDER_ID,
+					status: "closed",
+					totalAmount: { amount: "100.00", currency: "SAR" },
+					capturedAmountMinor: 1000,
+					refundedAmountMinor: 0,
+					operations: [
+						{ id: "close-capture", kind: "captured", amountMinor: 1000, currency: "SAR" },
+					],
+					raw: { status: "CLOSED" },
+				}),
 			});
 			const { instance, headers } = await makeAdminInstance(provider);
 			const res = await post(instance, headers, "close");
@@ -166,6 +377,34 @@ describe("admin order operations", () => {
 		});
 	});
 	describe("reconcile", () => {
+		it("recovers missed cancellation with capture history without refunding canceled funds", async () => {
+			const provider = stubProvider("tamara", {
+				fetchOrder: async () => ({
+					providerOrderId: ORDER_ID,
+					status: "fully_captured",
+					totalAmount: { amount: "100.00", currency: "SAR" },
+					capturedAmountMinor: 7500,
+					refundedAmountMinor: 0,
+					canceledAmountMinor: 2500,
+					operations: [
+						{ id: "missed-cancel", kind: "canceled", amountMinor: 2500, currency: "SAR" },
+						{ id: "remaining-capture", kind: "captured", amountMinor: 7500, currency: "SAR" },
+					],
+					raw: {},
+				}),
+			});
+			const { instance, headers } = await makeAdminInstance(provider);
+			expect((await post(instance, headers, "reconcile")).error).toBeNull();
+			expect(orderRow(instance)).toMatchObject({
+				capturedAmountMinor: 7500,
+				refundedAmountMinor: 0,
+				canceledAmountMinor: 2500,
+				status: "fully_captured",
+			});
+			expect(JSON.parse(String(orderRow(instance).appliedOperations))).toContain(
+				"tamara:cancel:missed-cancel",
+			);
+		});
 		it("syncs the local row from the provider's authoritative state", async () => {
 			const provider = stubProvider("tabby", {
 				fetchOrder: async () => ({
@@ -174,6 +413,9 @@ describe("admin order operations", () => {
 					totalAmount: { amount: "100.00", currency: "SAR" },
 					capturedAmountMinor: 10000,
 					refundedAmountMinor: 0,
+					operations: [
+						{ id: "remote-full-capture", kind: "captured", amountMinor: 10000, currency: "SAR" },
+					],
 					raw: { remote: true },
 				}),
 			});

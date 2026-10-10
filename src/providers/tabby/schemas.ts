@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { isOneOf } from "../../core/guards";
+import { parseAmount } from "../../core/money";
 import { absoluteUrlMax1024Schema, absoluteUrlSchema } from "../../core/url";
 const nonEmptyStringSchema = z.string().min(1);
 const decimalStringSchema = z.string().min(1);
@@ -50,7 +52,7 @@ export const tabbyOrderRequestSchema = z.object({
 export const tabbyBuyerHistoryRequestSchema = z
 	.object({
 		registered_since: dateTimeSchema,
-		loyalty_level: z.number().nonnegative(),
+		loyalty_level: z.number().nonnegative().optional(),
 		wishlist_count: z.number().int().nonnegative().optional(),
 		is_phone_number_verified: z.boolean().optional(),
 		is_email_verified: z.boolean().optional(),
@@ -141,9 +143,9 @@ const tabbyEducationAttachmentRequestSchema = z
 	.strict();
 export const tabbyCheckoutDataSchema = z
 	.object({
-		buyer_history: tabbyBuyerHistoryRequestSchema,
-		order_history: z.array(tabbyCheckoutCreationOrderHistorySchema).max(10),
-		attachment: tabbyEducationAttachmentSchema,
+		buyer_history: tabbyBuyerHistoryRequestSchema.optional(),
+		order_history: z.array(tabbyCheckoutCreationOrderHistorySchema).max(10).optional(),
+		attachment: tabbyEducationAttachmentSchema.optional(),
 	})
 	.strict();
 export const tabbyPaymentRequestSchema = z.object({
@@ -158,11 +160,23 @@ export const tabbyPaymentRequestSchema = z.object({
 	attachment: tabbyEducationAttachmentRequestSchema.optional(),
 	meta: z.record(z.string(), z.unknown()).optional(),
 });
-export const tabbyEligibilityPaymentRequestSchema = z.object({
-	amount: decimalStringSchema,
-	currency: nonEmptyStringSchema,
-	buyer: tabbyEligibilityBuyerRequestSchema,
-});
+export const tabbyEligibilityPaymentRequestSchema = z
+	.object({
+		amount: decimalStringSchema,
+		currency: nonEmptyStringSchema.refine(
+			(currency) => isOneOf(currency, ["SAR", "AED", "KWD"] as const),
+			"Currency must be supported by Tabby",
+		),
+		buyer: tabbyEligibilityBuyerRequestSchema,
+	})
+	.refine((money) => {
+		try {
+			parseAmount(money);
+			return true;
+		} catch {
+			return false;
+		}
+	}, "Amount must be nonnegative and use the currency's precision");
 export const tabbyCheckoutRequestSchema = z.object({
 	payment: tabbyPaymentRequestSchema,
 	lang: z.enum(["en", "ar"]),
@@ -205,7 +219,7 @@ export const tabbyUpdateWebhookRequestSchema = z.object({
 });
 const tabbyCaptureRecordSchema = z
 	.object({
-		id: z.string(),
+		id: nonEmptyStringSchema,
 		amount: z.string(),
 		created_at: z.string().optional(),
 		reference_id: z.string().optional(),
@@ -213,7 +227,7 @@ const tabbyCaptureRecordSchema = z
 	.passthrough();
 const tabbyRefundRecordSchema = z
 	.object({
-		id: z.string(),
+		id: nonEmptyStringSchema,
 		amount: z.string(),
 		created_at: z.string().optional(),
 		reference_id: z.string().optional(),
@@ -222,7 +236,7 @@ const tabbyRefundRecordSchema = z
 	.passthrough();
 export const tabbyPaymentDetailsSchema = z
 	.object({
-		id: z.string(),
+		id: nonEmptyStringSchema,
 		status: z.string(),
 		amount: z.string(),
 		currency: z.string(),
@@ -246,7 +260,7 @@ const tabbyProductInfoSchema = z
 	.passthrough();
 export const tabbyCheckoutResponseSchema = z
 	.object({
-		id: z.string(),
+		id: nonEmptyStringSchema,
 		status: z.enum(["created", "rejected", "expired", "approved"]),
 		configuration: z
 			.object({
@@ -273,7 +287,7 @@ const tabbyWebhookResponseHeaderSchema = z
 	.passthrough();
 export const tabbyWebhookRegistrationResponseSchema = z
 	.object({
-		id: z.string(),
+		id: nonEmptyStringSchema,
 		url: z.string(),
 		is_test: z.boolean(),
 		header: tabbyWebhookResponseHeaderSchema.nullable().optional(),
@@ -286,7 +300,7 @@ export const tabbyListWebhooksResponseSchema = z.union([
 ]);
 export const tabbyWebhookUpdateResponseSchema = z
 	.object({
-		id: z.string(),
+		id: nonEmptyStringSchema,
 		url: z.string(),
 		header: tabbyWebhookResponseHeaderSchema.nullable().optional(),
 	})

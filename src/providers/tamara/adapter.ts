@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { BnplPluginError } from "../../core/errors";
+import { BnplPluginError, BnplProviderError } from "../../core/errors";
 import { isMoneyLike, isOneOf, isRecord, readStringField } from "../../core/guards";
 import { isBnplCurrency, parseAmount } from "../../core/money";
 import { type CanonicalStatus, isCanonicalStatus } from "../../core/status";
@@ -17,6 +17,7 @@ import {
 	type TamaraLocale,
 	type TamaraPaymentType,
 } from "./constants";
+import { tamaraProviderDataSchema } from "./schemas";
 import type {
 	TamaraAddress,
 	TamaraCheckoutRequest,
@@ -102,6 +103,17 @@ export function toTamaraCheckoutRequest(
 		throw new BnplPluginError("PROVIDER_NOT_AVAILABLE", "tamara: shippingAddress is required");
 	}
 	const locale = input.locale ? LOCALE_MAP[input.locale] : opts.defaultLocale;
+	const providerData =
+		input.providerData === undefined
+			? undefined
+			: tamaraProviderDataSchema.safeParse(input.providerData);
+	if (providerData && !providerData.success) {
+		throw new BnplPluginError(
+			"PROVIDER_NOT_AVAILABLE",
+			"tamara: providerData.riskAssessment is invalid",
+			providerData.error,
+		);
+	}
 	return {
 		order_reference_id: input.orderReferenceId,
 		total_amount: input.totalAmount,
@@ -130,10 +142,13 @@ export function toTamaraCheckoutRequest(
 		is_mobile: input.isMobile,
 		expires_in_minutes: input.expiresInMinutes,
 		additional_data: input.additionalData,
+		risk_assessment: providerData?.success ? providerData.data.riskAssessment : undefined,
 	};
 }
 export function tamaraStatusToCanonical(status: string): CanonicalStatus {
-	return isCanonicalStatus(status) ? status : "new";
+	if (!isCanonicalStatus(status))
+		throw new BnplProviderError(PROVIDER_ID, `Tamara returned unknown order status: ${status}`);
+	return status;
 }
 const EVENT_TO_KIND_DIRECT = {
 	order_approved: "approved",
@@ -280,6 +295,21 @@ export function tamaraDedupKey(payload: Record<string, unknown>): string {
 			if (cancelId) return `${PROVIDER_ID}:order_canceled:${cancelId}`;
 			break;
 		}
+		case "order_updated": {
+			const cancelId = readStringField(data, "cancel_id");
+			if (cancelId) return `${PROVIDER_ID}:order_updated:${cancelId}`;
+			const serialized = JSON.stringify(payload, (_key, value: unknown) =>
+				isRecord(value)
+					? Object.fromEntries(
+							Object.keys(value)
+								.sort()
+								.map((key) => [key, value[key]]),
+						)
+					: value,
+			);
+			const digest = createHash("sha256").update(serialized).digest("hex");
+			return `${PROVIDER_ID}:order_updated:${orderId}:${digest}`;
+		}
 	}
 	return `${PROVIDER_ID}:${msg.event_type}:${orderId}`;
 }
@@ -300,7 +330,9 @@ export function tamaraWebhookDedupKeyForEvent(event: BnplWebhookEvent): string {
 		case "declined":
 			return `${PROVIDER_ID}:order_declined:${event.orderId}`;
 		case "updated":
-			return `${PROVIDER_ID}:order_updated:${event.orderId}`;
+			return isRecord(event.raw)
+				? tamaraDedupKey(event.raw)
+				: `${PROVIDER_ID}:order_updated:${event.orderId}`;
 		case "unknown":
 			return `${PROVIDER_ID}:${event.eventType}:${event.orderId ?? "unknown"}`;
 	}

@@ -80,8 +80,8 @@ describe("tamaraStatusToCanonical", () => {
 		expect(tamaraStatusToCanonical("authorised")).toBe("authorised");
 		expect(tamaraStatusToCanonical("fully_captured")).toBe("fully_captured");
 	});
-	it("falls back to `new` for unknown values", () => {
-		expect(tamaraStatusToCanonical("totally_unknown_status")).toBe("new");
+	it("rejects unknown provider statuses", () => {
+		expect(() => tamaraStatusToCanonical("totally_unknown_status")).toThrow(/unknown order status/);
 	});
 });
 describe("tamaraToCanonicalEvent", () => {

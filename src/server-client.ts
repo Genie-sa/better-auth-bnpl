@@ -10,6 +10,7 @@ import type {
 import type {
 	BnplAuthorizeResult,
 	BnplCancelArgs,
+	BnplCancelResult,
 	BnplCaptureArgs,
 	BnplCaptureResult,
 	BnplCheckoutInput,
@@ -19,6 +20,8 @@ import type {
 	BnplPreCheckResult,
 	BnplRefundArgs,
 	BnplRefundResult,
+	BnplVoidResult,
+	OptionalProviderResult,
 } from "./core/types";
 const DEFAULT_LOGGER: ProviderLogger = {
 	info: () => undefined,
@@ -45,10 +48,13 @@ interface ProviderNamespace<Provider extends BnplProvider = BnplProvider> {
 	cancel: (
 		providerOrderId: string,
 		...args: OperationArg<ProviderCancelArgs<Provider>>
-	) => Promise<void>;
+	) => Promise<OptionalProviderResult<BnplCancelResult>>;
 	preCheck: (input: BnplPreCheckInput) => Promise<BnplPreCheckResult>;
 	authorize?: (providerOrderId: string) => Promise<BnplAuthorizeResult>;
-	voidCheckout?: (checkoutId: string, providerOrderId: string) => Promise<void>;
+	voidCheckout?: (
+		checkoutId: string,
+		providerOrderId: string,
+	) => Promise<OptionalProviderResult<BnplVoidResult>>;
 	closePayment?: (providerPaymentId: string) => Promise<void>;
 }
 interface OptionsResultEntry<Id extends string> {
@@ -84,7 +90,7 @@ export type BnplServerClient<Providers extends Record<string, BnplProvider>> = {
 		providerId: Id,
 		providerOrderId: string,
 		...args: OperationArg<ProviderCancelArgs<Providers[Id]>>
-	) => Promise<void>;
+	) => Promise<OptionalProviderResult<BnplCancelResult>>;
 	authorize: (
 		providerId: ProviderId<Providers>,
 		providerOrderId: string,
@@ -109,7 +115,11 @@ interface GenericBnplServerClient {
 		providerOrderId: string,
 		args: BnplRefundArgs,
 	) => Promise<BnplRefundResult>;
-	cancel: (providerId: string, providerOrderId: string, args?: BnplCancelArgs) => Promise<void>;
+	cancel: (
+		providerId: string,
+		providerOrderId: string,
+		args?: BnplCancelArgs,
+	) => Promise<OptionalProviderResult<BnplCancelResult>>;
 	authorize: (providerId: string, providerOrderId: string) => Promise<BnplAuthorizeResult>;
 	preCheck: (providerId: string, input: BnplPreCheckInput) => Promise<BnplPreCheckResult>;
 	provider: (id: string) => ProviderNamespace;
@@ -159,7 +169,7 @@ export function createBnplClient(
 	const ctx: ProviderContext = { logger };
 	const requireProvider = (id: string): BnplProvider => {
 		const p = providers[id];
-		if (!p) {
+		if (!Object.hasOwn(providers, id) || !p) {
 			throw new BnplPluginError(
 				"PROVIDER_NOT_CONFIGURED",
 				`createBnplClient: provider \`${id}\` is not configured`,
@@ -167,7 +177,6 @@ export function createBnplClient(
 		}
 		return p;
 	};
-	const namespaces = buildNamespaces(providers, ctx);
 	const generic = {
 		options: async (input: BnplPreCheckInput): Promise<Array<OptionsResultEntry<string>>> => {
 			const ids = Object.keys(providers);
@@ -229,5 +238,13 @@ export function createBnplClient(
 			return namespaceFor(p, ctx);
 		},
 	};
+	for (const id of Object.keys(providers)) {
+		if (id in generic) {
+			throw new Error(
+				`createBnplClient: provider id \`${id}\` is reserved for the server-client API`,
+			);
+		}
+	}
+	const namespaces = buildNamespaces(providers, ctx);
 	return { ...namespaces, ...generic };
 }

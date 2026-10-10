@@ -2,7 +2,7 @@ import type { GenericEndpointContext } from "better-auth";
 import { isBnplCurrency } from "../core/money";
 import type { BnplProvider } from "../core/provider";
 import type { BnplCaptureResult, BnplRefundResult, BnplWebhookEvent } from "../core/types";
-export type WebhookEventStatus = "received" | "processed" | "failed";
+export type WebhookEventStatus = "received" | "processing" | "processed" | "failed";
 export interface StoredWebhookEvent {
 	id: string;
 	provider: string;
@@ -16,6 +16,9 @@ export interface StoredWebhookEvent {
 	status: WebhookEventStatus | string;
 	attempts: number;
 	orderApplied?: boolean;
+	processingToken?: string | null;
+	processingUntil?: Date | null;
+	deliveryState?: string | null;
 	processedAt?: Date | null;
 	lastError?: string | null;
 }
@@ -104,19 +107,59 @@ function classifyExisting(row: StoredWebhookEvent): RecordWebhookEventResult {
 	if (row.status === "processed") return { outcome: "duplicate", row };
 	return { outcome: "reprocess", row };
 }
+const PROCESSING_LEASE_MS = 5 * 60 * 1000;
+export async function claimWebhookEvent(
+	ctx: GenericEndpointContext,
+	row: StoredWebhookEvent,
+): Promise<StoredWebhookEvent | null> {
+	if (
+		row.status === "processing" &&
+		row.processingUntil &&
+		new Date(row.processingUntil).getTime() > Date.now()
+	)
+		return null;
+	const processingToken = crypto.randomUUID();
+	return ctx.context.adapter.incrementOne<StoredWebhookEvent>({
+		model: "bnplWebhookEvent",
+		where: [
+			{ field: "id", value: row.id },
+			{ field: "status", value: row.status },
+			...(row.processingToken ? [{ field: "processingToken", value: row.processingToken }] : []),
+		],
+		increment: { attempts: 1 },
+		set: {
+			status: "processing",
+			processingToken,
+			processingUntil: new Date(Date.now() + PROCESSING_LEASE_MS),
+		},
+	});
+}
+export async function updateClaimedWebhookEvent(
+	ctx: GenericEndpointContext,
+	row: StoredWebhookEvent,
+	update: Record<string, unknown>,
+): Promise<void> {
+	const result = await ctx.context.adapter.incrementOne<StoredWebhookEvent>({
+		model: "bnplWebhookEvent",
+		where: [
+			{ field: "id", value: row.id },
+			{ field: "processingToken", value: row.processingToken ?? null },
+		],
+		increment: {},
+		set: update,
+	});
+	if (!result) throw new Error("bnpl: webhook processing lease was lost");
+}
 export async function markWebhookEventProcessed(
 	ctx: GenericEndpointContext,
 	row: StoredWebhookEvent,
 ): Promise<void> {
-	await ctx.context.adapter.update({
-		model: "bnplWebhookEvent",
-		where: [{ field: "id", value: row.id }],
-		update: {
-			status: "processed",
-			processedAt: new Date(),
-			attempts: (row.attempts ?? 0) + 1,
-			lastError: null,
-		},
+	await updateClaimedWebhookEvent(ctx, row, {
+		status: "processed",
+		processedAt: new Date(),
+		lastError: null,
+		processingToken: null,
+		processingUntil: null,
 	});
 }
 export async function markWebhookEventFailed(
@@ -124,25 +167,27 @@ export async function markWebhookEventFailed(
 	row: StoredWebhookEvent,
 	error: unknown,
 ): Promise<void> {
-	await ctx.context.adapter.update({
-		model: "bnplWebhookEvent",
-		where: [{ field: "id", value: row.id }],
-		update: {
-			status: "failed",
-			attempts: (row.attempts ?? 0) + 1,
-			lastError: error instanceof Error ? error.message : String(error),
-		},
+	await updateClaimedWebhookEvent(ctx, row, {
+		status: "failed",
+		lastError: error instanceof Error ? error.message : String(error),
+		processingToken: null,
+		processingUntil: null,
 	});
 }
 export async function markWebhookEventOrderApplied(
 	ctx: GenericEndpointContext,
 	row: StoredWebhookEvent,
 ): Promise<void> {
-	if (row.orderApplied) return;
-	await ctx.context.adapter.update({
-		model: "bnplWebhookEvent",
-		where: [{ field: "id", value: row.id }],
-		update: { orderApplied: true },
+	if (!row.orderApplied) await updateClaimedWebhookEvent(ctx, row, { orderApplied: true });
+}
+export async function saveWebhookDeliveryState(
+	ctx: GenericEndpointContext,
+	row: StoredWebhookEvent,
+	state: unknown,
+): Promise<void> {
+	await updateClaimedWebhookEvent(ctx, row, {
+		deliveryState: JSON.stringify(state),
+		processingUntil: new Date(Date.now() + PROCESSING_LEASE_MS),
 	});
 }
 export async function recordSyntheticProviderEvent(

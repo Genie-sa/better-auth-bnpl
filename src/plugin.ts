@@ -60,7 +60,7 @@ export const bnpl = <
 			}
 			if (options.captureOnAuthorise && !options.captureOnAuthoriseShippingInfo) {
 				ctx.logger.warn(
-					"bnpl: `captureOnAuthorise` without `captureOnAuthoriseShippingInfo` — providers that require shipping provenance (Tamara) will skip auto-capture",
+					"bnpl: `captureOnAuthorise` without `captureOnAuthoriseShippingInfo` — Tamara auto-capture requires shipping provenance and will fail until configured",
 				);
 			}
 			ctx.logger.info(`bnpl: configured providers — ${providerIds.join(", ")}`);

@@ -11,6 +11,11 @@ Use Tabby, Tamara, or both. Your app talks to one canonical API for checkout, op
 npm i better-auth-bnpl
 ```
 
+Requires Better Auth `^1.6.23`. Persisted order updates use its guarded, atomic `incrementOne` adapter operation.
+
+When upgrading an existing database, regenerate and apply your Better Auth schema migration before starting the new version. The migration adds `bnplOrder.appliedOperations`, `bnplOrder.webhookTransitions`, `bnplOrder.moneyCommands`, `bnplOrder.checkoutAttempt`, `bnplOrder.canceledAmountMinor`, and `bnplWebhookEvent.processingToken`, `processingUntil`, and `deliveryState`. Backfill existing `canceledAmountMinor` values with `0` and use a database default of `0` before enforcing NOT NULL; inspect generated migrations because SQLite ALTER migrations may omit that default. Keep the existing unique webhook dedup-key constraint and order `version` column. Custom adapters must implement guarded `incrementOne` atomically; an unguarded read followed by an update cannot safely process concurrent payments.
+
+
 ## Agent skill
 
 The package ships a [skill](./skills/better-auth-bnpl-integration/SKILL.md) that walks an agent through the full integration: provider map, server-authoritative pricing, client wiring, schema generation, webhook registration, and provider secrets.
@@ -70,7 +75,7 @@ The plugin targets the online merchant BNPL lifecycle, not every auxiliary produ
 | Close payment | Yes | N/A |
 | Webhook receive/verify | Static shared header | HS256 JWT |
 | Webhook CRUD clients | Yes, raw client | Yes, raw client |
-| Disputes | Tabby raw APIs only; no Better Auth route yet | N/A |
+| Disputes | Not implemented | N/A |
 | In-store/offline flows | Not the plugin target | Raw-client/OpenAPI surface only where present |
 
 Provider-specific operations return `OPERATION_NOT_SUPPORTED` when called for the wrong provider. For example, `/bnpl/admin/orders/:id/void` works for Tamara rows and fails cleanly for Tabby rows.
@@ -483,6 +488,14 @@ const providerData = {
 } satisfies TabbyCheckoutData;
 ```
 
+### Persisted checkout retries
+
+Supply the same `orderReferenceId` for retries of one purchase. With `persistOrders: true`, the plugin reserves that reference before calling the provider. A saved result is replayed without creating another remote checkout. Different input or an uncertain provider outcome returns 409. Pending outcomes never expire into another provider call; verify them upstream before deliberately creating a new purchase.
+
+The database must enforce the unique `bnplOrder.orderReferenceId` constraint, including for concurrent creates. Custom adapters must preserve it; Better Auth's memory adapter is unsuitable for concurrent persisted payment processing. Omitting the reference generates a fresh one and cannot protect a subsequent client retry.
+
+Integration hooks checkpoint separately and use an exclusive five-minute claim. A retry resumes unfinished hooks after an observed failure or expired claim. External effects still require deduplication by order reference and hook name across a crash before checkpointing. Completed checkout references retain their original hosted URL; use a new reference for an intentionally new purchase after expiry or rejection.
+
 ### Checkout options
 
 - **Sessions and anonymous users.** A session is always required — persistence and buyer mapping need a user id, so there is no guest checkout. `checkout({ authenticatedUsersOnly: false })` only permits Better Auth *anonymous-plugin* sessions (which still carry a user id); the default (`true`) rejects them with `ANONYMOUS_USER_NOT_ALLOWED`. No session at all is always a 401.
@@ -562,8 +575,9 @@ bnpl({
 | `apiToken` | yes | Bearer token from the Tamara merchant portal |
 | `notificationToken` | yes | HMAC secret used to verify the webhook JWT |
 | `environment` | no | `"sandbox"` \| `"production"`; defaults to `"sandbox"` |
+| `preCheckTimeoutMs` | no | Eligibility-only budget; defaults to `200` ms. Missing phone or upstream failures leave the option available; checkout decides eligibility |
 | `replayToleranceSeconds` | no | `number \| false`. Defaults to `300`. Rejects a delivery whose JWT `iat` is older than the window (enforced only when `iat` is present); `false` disables it |
-| `timeoutMs` | no | Per-request upstream timeout in ms; defaults to `15000` |
+| `timeoutMs` | no | Total upstream request budget, including GET retries and backoff; defaults to `15000` |
 | `baseUrl` | no | Override base URL for tests or proxies |
 | `defaultLocale` | no | Fallback locale when a checkout omits one |
 | `storeCode` | no | Multi-store accounts only |
@@ -580,7 +594,7 @@ Tamara's webhook **body is unsigned by design**. The `?tamaraToken=` / `Authoriz
 | `webhookHeader.value` | yes | Shared secret; use a long random value and rotate periodically |
 | `country` | no | Host selector only: `"SA"` routes to `api.tabby.sa` (test **and** live); `"AE"`/`"KW"` route to `api.tabby.ai` |
 | `environment` | no | Informational only — Tabby has no sandbox host, so this never affects routing. Test vs live is the key type |
-| `timeoutMs` | no | Per-request upstream timeout in ms; defaults to `15000` |
+| `timeoutMs` | no | Total upstream request budget, including GET retries and backoff; defaults to `15000` |
 | `baseUrl` | no | Full host override; wins over `country` |
 | `preCheckBounds` | no | Per-currency amount bounds for the `preCheck()` heuristic |
 
@@ -590,7 +604,7 @@ Tabby's webhook signing is *static-secret per registered webhook*, not body-HMAC
 
 ### Timeouts and retries
 
-Every upstream call to either provider is timeout-bounded (`timeoutMs`, default `15000`). Idempotent GETs retry up to twice with exponential backoff plus jitter on transient failures (429/502/503/504 and timeouts); money mutations (capture/refund/close) never blind-retry — a POST that times out may have succeeded upstream, so retrying it risks a double charge.
+Every upstream call shares one total request budget (`timeoutMs`, default `15000`) across attempts and backoff. GETs retry up to twice on 429/500/502/503/504, network failures and timeouts. `Retry-After` is respected when its delay fits the remaining budget. POST money operations and checkout creation are sent once because a timed-out request may have succeeded upstream. Tamara eligibility uses a separate 200 ms default budget and fails open as its integration contract specifies.
 
 ---
 
@@ -644,30 +658,39 @@ webhooks({
 
 ### At-least-once processing
 
-When `persistOrders: true`, every verified webhook gets a `bnplWebhookEvent` row keyed by a provider-prefixed dedup key (`{provider}:{eventType}:{capture_id|refund_id|...}`). Each row moves through a lifecycle: `received` → `processed` (persistence + typed dispatch succeeded) or `failed` (any step threw). The row also tracks `attempts`, `orderApplied`, `processedAt`, and `lastError`.
+When `persistOrders: true`, verified deliveries are stored in `bnplWebhookEvent`. A guarded claim grants one worker a renewable five-minute lease. Active duplicate deliveries return HTTP 503; processed duplicates return HTTP 200. Expired claims can be retried.
 
-- **Failures retry, and the same event re-processes.** If a handler or persistence step throws, the row is marked `failed` and the endpoint returns HTTP 500. Providers retry non-200 deliveries, and the retry re-processes the *same* row rather than treating it as a duplicate.
-- **Money is never double-counted.** The `orderApplied` flag is the idempotency barrier: it is set the moment a capture/refund delta commits to the order row. A retry after a mid-pipeline failure skips the delta (status and `rawData` still refresh) so the cumulative amount is never applied twice.
-- **Duplicates of already-processed events are cheap.** A redelivery of a `processed` event ACKs `{ received: true, duplicate: true }` without re-running any handlers.
+Cancellation amounts reduce the remaining capturable balance without changing the original order total. Native cancellation identities join capture/refund identities in the atomic ledger. Amount-bearing admin cancellations require a stable `merchantReferenceId`. This is a local retry key; Tamara does not document a provider idempotency key. Reusing the reference with changed input returns 409. Tamara cancellation and refund responses can contain cumulative totals; mismatched response amounts are corroborated against the matching native transaction before applying an operation delta.
 
-Admin capture/refund calls and `captureOnAuthorise` pre-seed the same provider-native dedup keys before the matching provider webhook arrives, so a merchant-initiated capture followed by `order_captured` / a Tabby capture delivery does not double-count `capturedAmountMinor` or re-fire typed handlers.
+Cancel, void, and close reserve a durable command before any provider mutation. Completed commands replay saved results. Uncertain retries use GET only: partial cancellation requires one matching new native cancellation and the reserved financial baseline; Tabby cancellation and close require verified payment closure. Void recovery cannot infer success from a paid order. Stale or ambiguous evidence remains blocked with 409. Closing or cancelling an already closed Tabby payment verifies GET state without repeating POST, retaining its capture/refund status.
 
-For distributed retries, pass stable operation references from your order system: `merchantReferenceId` on capture and `merchantRefundId` on refund. Tabby requires these as `reference_id` idempotency keys. Admin endpoints derive deterministic references from the persisted order state when omitted, but explicit references are the strongest contract when jobs may be retried across processes.
+Capture/refund identities are recorded in `bnplOrder.appliedOperations` in the same atomic write as the balance change. This protects money accounting across concurrent webhooks, admin operations, reconciliation, and retries after database failures. Tabby snapshots apply every native operation before their final lifecycle update. A webhook whose order is missing remains failed and retryable instead of being acknowledged as processed.
+
+Callback completions and original status transitions are persisted. Failed callbacks resume without repeating callbacks already checkpointed. A crash after an external effect but before its checkpoint can still repeat that effect: deduplicate external work using the stable `deliveryId` passed to canonical and status callbacks. Provider-specific legacy callbacks do not receive this ID.
+
+Stateless webhooks dispatch every event in a compound notification, but require application-level deduplication. Tamara cancellation notifications use verified native balances to distinguish partial updates from full cancellation. Persisted cancellation callbacks retain their original kind and status on retries, even if the provider order later changes.
+
+Admin and automatic money operations use the same native operation identities as incoming webhooks. Synthetic event rows are supplemental records; the order ledger is the accounting barrier.
+
+Financial callbacks do not form a complete transaction feed. An operation already recorded by an admin command or reconciliation can suppress its later webhook callback to avoid duplicate effects. Business workflows must also handle their own successful commands and reconciliation results.
+
+For distributed retries, pass stable operation references from your order system: `merchantReferenceId` on capture and `merchantRefundId` on refund. Tabby requires these as `reference_id` idempotency keys. Admin capture/refund endpoints require explicit references and validate the latest available balance before calling the provider. They reserve a durable command before the provider call and replay completed results without another call. Reusing a reference with different input returns 409. A timeout or failed local commit leaves the command pending; retries return 409. Reconciliation does not clear pending command entries. An uncertain command blocks all new mutations on that order, including commands with different references. Reconciliation alone does not release the journal. Pending commands never expire automatically; unresolved commands require deliberate operator recovery after verifying upstream state.
 
 ### Status state machine
 
-Order status advances along a forward-only transition table, because provider webhooks are at-least-once and unordered:
+Order status uses guarded lifecycle transitions and current financial balances, because provider webhooks can arrive out of order:
 
 - **Regressions are ignored.** A late or retried event whose target status is not a legitimate forward transition keeps the current status and logs a warning; `rawData`/`updatedAt` and the cumulative deltas still apply.
 - **Tamara `order_updated` never changes status** — it only revises amounts/`rawData`.
 - **Currency-mismatched deltas are skipped.** A capture/refund event whose currency differs from the stored order currency logs a warning and applies no delta (a ×1000 KWD delta on a ×100 SAR order would be 10× off).
-- **Admin reconcile is authoritative-remote** and bypasses the transition guard, writing the provider's own status directly (optimistic versioning still guards against a concurrent webhook clobbering it).
+- **Reconciliation rejects stale snapshots.** A changed local version or lower remote totals requires a retry. Retrieved native operation identities are imported with the totals to prevent later webhook replay from adding them again.
+- **Closed payments can be refunded.** Full-refund status compares refunds with captured funds; refund-before-capture deliveries retain their financial effect as later captures arrive.
 
 ### Handler time budget
 
 Handlers run **inline, before the endpoint ACKs**. Providers time out slow webhook requests and retry: Tabby times out at 1 minute and retries up to 4 more times over exponential ~1–4 minute intervals, only HTTP 200 acknowledges, delivery order is not guaranteed, and duplicates happen (all per Tabby's official docs). Keep handlers fast and offload slow work to a queue. The dedup + lifecycle machinery makes such a retry safe (already-processed events ACK without re-running), but a slow handler still burns a provider retry.
 
-### Admin redelivery
+## Admin redelivery
 
 Pass a `redelivery` option to mount two admin-gated recovery endpoints — the path once a provider exhausts its automatic retries:
 
@@ -681,11 +704,16 @@ webhooks({
 ```
 
 - `GET /bnpl/admin/webhook-events` — list/search events (filter by `status` / `provider` / `providerOrderId`, paginated).
-- `POST /bnpl/admin/webhook-events/:id/redeliver` — re-derive the canonical event from the stored `rawData` and re-run persistence + typed dispatch. The `orderApplied` barrier still protects against re-applying a delta.
+- `POST /bnpl/admin/webhook-events/:id/redeliver` — re-derive the canonical event from the stored `rawData` and re-run persistence + typed dispatch. The atomic operation ledger protects against re-applying a delta.
 
 ### Auto-authorise (Tamara)
 
 Tamara requires you to call `POST /orders/{id}/authorise` within 72h of the customer's approval signal. With `autoAuthorise: true` on the umbrella plugin (default), this happens automatically when an `approved` webhook arrives. Handler receives the outcome via `autoAuthoriseResult`. **Tabby providers ignore this flag** because they have no equivalent step.
+
+Automatic authorisation requires `persistOrders: true`. Admin and webhook authorisation share a durable intent before the provider POST. After a timeout or uncertain result, retries only fetch the order: verified authorisation or capture completes recovery with the financial operation ledger; an order still `approved` remains blocked and needs investigation instead of another POST. Tamara's [authorisation API](https://docs.tamara.co/reference/authoriseorder) can auto-capture funds and does not document a merchant idempotency key.
+
+Automatic capture also reserves a durable command before calling the provider. Unknown outcomes, timeouts, rate limits, and server errors remain pending. A confirmed provider rejection may release only its owning reservation for retry. A verified webhook or reconciliation must prove the remaining capturable balance is zero before a pending automatic capture can be treated as complete. Cancellation cannot bypass an earlier pending capture by changing the remaining amount.
+
 
 `captureOnAuthorise` is intentionally opt-in for digital-goods flows and requires `persistOrders: true`; without a persisted row the plugin cannot know the authoritative captured amount/currency, so it logs and skips auto-capture. Tamara capture also requires shipping provenance, so provide `captureOnAuthoriseShippingInfo` when enabling this mode. Physical-goods flows should keep it off and use admin capture after dispatch with `shippingInfo`.
 
@@ -706,7 +734,7 @@ bnpl({
 
 ## Admin
 
-Admin endpoints are mounted only when the `admin()` sub-plugin is in `use:`. They look up the order's provider from the row, then dispatch to the matching provider method. `admin()` also mounts `GET /bnpl/admin/orders` — a back-office list/search over every order (`provider` / `status` / `userId` filters, paginated), covered by the typed `authClient.bnpl.admin.listOrders()` helper. Admin rows are FULL persisted orders, `rawData` included (only user-facing reads strip it).
+Admin endpoints are mounted only when the `admin()` sub-plugin is in `use:`. They look up the order's provider from the row, then dispatch to the matching provider method. `admin()` also mounts `GET /bnpl/admin/orders` — a back-office list/search over every order (`provider` / `status` / `userId` filters, paginated), covered by the typed `authClient.bnpl.admin.listOrders()` helper. Order responses omit provider raw payloads and internal operation/transition ledgers.
 
 ```ts
 import { authClient } from "@/lib/auth-client";
@@ -821,6 +849,8 @@ if (error?.code === "CHECKOUT_REJECTED") {}
 | `CURRENCY_NOT_SUPPORTED_BY_PROVIDER` | Provider doesn't support this currency |
 | `CHECKOUT_CREATION_FAILED` | Upstream rejected the request |
 | `CHECKOUT_REJECTED` | Pre-scoring rejected at create time (Tabby) |
+| `CHECKOUT_CONFLICT` / `MONEY_COMMAND_CONFLICT` | Changed input, concurrent processing, or an uncertain earlier outcome; verify state before retrying |
+| `INVALID_CANCEL_REFERENCE` | Amount-bearing cancellation needs a stable `merchantReferenceId` |
 | `INVALID_URL` | A checkout redirect URL is not absolute http(s) or its origin isn't in `trustedRedirectOrigins` |
 | `RESOLVE_CHECKOUT_INCOMPLETE` | `resolveCheckout` returned without the canonical money fields |
 | `OPERATION_NOT_SUPPORTED` | Admin op called against a provider that doesn't support it |

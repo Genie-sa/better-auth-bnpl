@@ -52,6 +52,8 @@ const STATUS_TRANSITIONS: Readonly<Record<CanonicalStatus, ReadonlySet<Canonical
 		"canceled",
 		"partially_captured",
 		"fully_captured",
+		"partially_refunded",
+		"fully_refunded",
 	]),
 	approved: new Set([
 		"authorised",
@@ -60,6 +62,8 @@ const STATUS_TRANSITIONS: Readonly<Record<CanonicalStatus, ReadonlySet<Canonical
 		"canceled",
 		"partially_captured",
 		"fully_captured",
+		"partially_refunded",
+		"fully_refunded",
 	]),
 	authorised: new Set([
 		"expired",
@@ -82,8 +86,8 @@ const STATUS_TRANSITIONS: Readonly<Record<CanonicalStatus, ReadonlySet<Canonical
 	declined: new Set(),
 	expired: new Set(),
 	canceled: new Set(),
-	fully_refunded: new Set(),
-	closed: new Set(),
+	fully_refunded: new Set(["partially_refunded"]),
+	closed: new Set(["partially_refunded", "fully_refunded"]),
 	updated: new Set(),
 };
 export function canTransition(

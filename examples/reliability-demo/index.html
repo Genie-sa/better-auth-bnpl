@@ -1,0 +1,226 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BNPL reliability lab</title>
+<style>
+:root{color-scheme:light;--ink:#182c28;--paper:#f6f4eb;--line:#d5ded5;--mint:#b8edd8;--muted:#586861}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.6 ui-sans-serif,system-ui,sans-serif}main{max-width:1180px;margin:auto;padding:36px 28px}header{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--ink);padding-bottom:16px}.brand{font-weight:750;letter-spacing:-.03em}h1{font:54px/1.06 Georgia,serif;margin:40px 0 15px;max-width:750px}h2{font:26px/1.2 Georgia,serif;margin:0 0 20px}p{max-width:720px;color:var(--muted)}.pill{font-size:12px;border:1px solid var(--ink);border-radius:20px;padding:4px 12px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin:30px 0}.panel{border:1px solid var(--line);padding:26px;background:#fffef8}.checkout{background:var(--mint)}label{display:block;font-size:13px;margin:12px 0 4px}input,select{width:100%;padding:11px;border:1px solid #b3beb7;border-radius:3px;background:#fff;font:inherit;color:var(--ink)}button,a.button{display:inline-block;border:0;border-radius:3px;background:var(--ink);color:white;padding:11px 17px;font:inherit;cursor:pointer;text-decoration:none;margin:14px 7px 0 0}button.secondary{background:transparent;color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink)}button.small{padding:6px 10px;font-size:12px;margin:4px}.price{font:42px Georgia,serif;margin:16px 0}.quiet{font-size:13px;color:var(--muted)}.bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}.tablewrap{overflow:auto}table{border-collapse:collapse;width:100%;font-size:13px}td,th{text-align:left;padding:14px 10px;border-bottom:1px solid var(--line);white-space:nowrap}th{color:var(--muted);font-weight:500}code{font:12px ui-monospace,monospace}.status{background:#e7eee7;padding:3px 7px;border-radius:3px}.notice{padding:14px;background:#fff;border-left:3px solid var(--ink);display:none;margin-top:20px;white-space:pre-wrap;overflow-wrap:anywhere}.timeline{list-style:none;padding:0;margin:0}.timeline li{padding:12px 0;border-bottom:1px solid var(--line)}.timeline time{color:var(--muted);font-size:12px;margin-right:10px}button:disabled{opacity:.5;cursor:wait}:focus-visible{outline:3px solid #3b9276;outline-offset:3px}#identity{font-size:13px;text-align:right}footer{margin-top:30px;color:var(--muted);font-size:12px}details{margin:14px 0}summary{cursor:pointer}.split{display:flex;gap:10px}.split>*{flex:1}@media(max-width:780px){main{padding:22px 16px}.grid{grid-template-columns:1fr}h1{font-size:40px}.panel{padding:20px}header{gap:12px}.bar{align-items:flex-start}}@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
+</style>
+<main><header><span class="brand">BNPL / reliability lab</span><span class="pill">Sandbox only</span><span id="identity">Signed out</span></header><h1>Follow every payment.<br>Trust every transition.</h1><p>Create a test purchase, finish the provider's hosted checkout, and watch authorisation, capture and webhook deliveries appear here. The database persists between runs.</p><div id="notice" class="notice" role="status" aria-live="polite"></div>
+<div class="grid"><section class="panel" id="signin"><h2>Your sandbox session</h2><form id="account"><label for="name">Name</label><input id="name" value="Sandbox tester" autocomplete="name"><label for="email">Email</label><input id="email" type="email" placeholder="tester@example.com" autocomplete="email" required><label for="password">Password</label><input id="password" type="password" minlength="8" autocomplete="current-password" required><button name="mode" value="signin">Sign in</button><button name="mode" value="signup" class="secondary">Create account</button></form><details><summary>Local administrator access</summary><p class="quiet">Open this demo on localhost and use the local bootstrap to inspect all orders and test refunds. Accounts created through the public tunnel have no administrator access.</p><a class="button" href="/demo/bootstrap">Open local administrator</a></details></section>
+<section class="panel checkout"><h2>Sandbox reliability course</h2><p class="quiet">Two digital seats, SAR 50 each. Complete checkout, then verify the order and its money movements below.</p><div class="price">SAR 100.00</div><label for="provider">Payment provider</label><select id="provider"><option value="tabby">Tabby</option><option value="tamara">Tamara</option></select><label for="checkoutReference">Checkout reference</label><input id="checkoutReference" required><button class="secondary" id="newPurchase">New purchase</button><button id="buy">Open test checkout</button><div id="checkoutLink"></div><p class="quiet">Tabby success credentials are filled server-side; its test OTP is 8888. Tamara uses its documented sandbox buyer phone. No production keys are loaded.</p></section></div>
+<section class="panel"><div class="bar"><h2>Orders</h2><div><button class="small secondary" id="refresh">Refresh</button><button class="small secondary" id="signout">Sign out</button></div></div><div id="operationControls"><div class="split"><div><label for="operationAmount">Operation amount (SAR)</label><input id="operationAmount" type="number" inputmode="decimal" min="0.01" step="0.01" value="25.00" required></div><div><label for="operationReference">Operation reference</label><input id="operationReference" required></div></div><button class="small secondary" id="newReference">New reference</button><p class="quiet">Keep the reference to retry the same operation. Generate a new reference for a separate capture or refund.</p></div><div class="tablewrap"><table><thead><tr><th>Provider / reference</th><th>Status</th><th>Total</th><th>Captured</th><th>Refunded</th><th>Actions</th></tr></thead><tbody id="orders"><tr><td colspan="6">Sign in to see your orders.</td></tr></tbody></table></div></section>
+<div class="grid"><section class="panel"><h2>Webhook deliveries</h2><div class="tablewrap"><table><thead><tr><th>Provider</th><th>Event</th><th>Result</th><th>Attempts</th><th>Replay</th></tr></thead><tbody id="events"><tr><td colspan="5">Deliveries appear after checkout.</td></tr></tbody></table></div></section><section class="panel"><h2>Callback timeline</h2><ul class="timeline" id="timeline"><li>No callbacks yet.</li></ul></section></div><footer>Replay and money operations require the local administrator session. Reconciliation fetches the provider's current state. Provider checkout links are sensitive test session links.</footer></main>
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const savedProvider = sessionStorage.getItem("bnpl-demo-provider");
+if (["tabby", "tamara"].includes(savedProvider)) $("provider").value = savedProvider;
+function saveCheckoutReference() {
+	sessionStorage.setItem("bnpl-demo-checkout-" + $("provider").value, $("checkoutReference").value);
+}
+function loadCheckoutReference() {
+	$("checkoutReference").value =
+		sessionStorage.getItem("bnpl-demo-checkout-" + $("provider").value) ||
+		"demo-purchase-" + crypto.randomUUID();
+	saveCheckoutReference();
+	$("checkoutLink").replaceChildren();
+}
+$("checkoutReference").oninput = saveCheckoutReference;
+$("provider").onchange = () => {
+	sessionStorage.setItem("bnpl-demo-provider", $("provider").value);
+	loadCheckoutReference();
+};
+$("newPurchase").onclick = () => {
+	$("checkoutReference").value = "demo-purchase-" + crypto.randomUUID();
+	saveCheckoutReference();
+	$("checkoutLink").replaceChildren();
+};
+loadCheckoutReference();
+$("operationReference").value = sessionStorage.getItem("bnpl-demo-operation-reference") || "demo-" + crypto.randomUUID();
+function saveOperationReference() {
+	sessionStorage.setItem("bnpl-demo-operation-reference", $("operationReference").value);
+}
+saveOperationReference();
+$("operationReference").oninput = saveOperationReference;
+$("newReference").onclick = () => {
+	$("operationReference").value = "demo-" + crypto.randomUUID();
+	saveOperationReference();
+};
+let state;
+let busy = false;
+function notice(message) {
+	$("notice").style.display = "block";
+	$("notice").textContent = message;
+}
+function escape(value) {
+	return String(value ?? "").replace(
+		/[&<>"']/g,
+		(c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
+	);
+}
+async function api(path, body) {
+	const response = await fetch(path, {
+		method: body === undefined ? "GET" : "POST",
+		headers: body === undefined ? {} : { "content-type": "application/json" },
+		body: body === undefined ? undefined : JSON.stringify(body),
+	});
+	const data = await response.json();
+	if (!response.ok)
+		throw new Error(data.message || data.error || `Request failed (${response.status})`);
+	return data;
+}
+async function run(fn) {
+	if (busy) return;
+	busy = true;
+	document.querySelectorAll("button").forEach((b) => (b.disabled = true));
+	try {
+		await fn();
+	} catch (error) {
+		notice(error.message);
+	} finally {
+		busy = false;
+		document.querySelectorAll("button").forEach((b) => (b.disabled = false));
+	}
+}
+$("account").onsubmit = (e) => {
+	e.preventDefault();
+	run(async () => {
+		const signup = e.submitter.value === "signup";
+		await api("/api/auth/" + (signup ? "sign-up/email" : "sign-in/email"), {
+			name: $("name").value,
+			email: $("email").value,
+			password: $("password").value,
+		});
+		$("password").value = "";
+		notice("Signed in. You can create a sandbox purchase.");
+		await refresh();
+	});
+};
+$("signout").onclick = () =>
+	run(async () => {
+		await api("/api/auth/sign-out", {});
+		state = null;
+		await refresh();
+	});
+$("buy").onclick = () =>
+	run(async () => {
+		if (!$("checkoutReference").reportValidity()) return;
+		saveCheckoutReference();
+		const provider = $("provider").value;
+		const result = await api("/api/auth/bnpl/checkout", {
+			provider,
+			orderReferenceId: $("checkoutReference").value,
+			description: "Sandbox reliability course",
+			countryCode: "SA",
+			locale: "en",
+			shippingAddress: {
+				line1: "Sandbox test address",
+				city: "Riyadh",
+				postalCode: "12345",
+				countryCode: "SA",
+			},
+			billingAddress: {
+				line1: "Sandbox test address",
+				city: "Riyadh",
+				postalCode: "12345",
+				countryCode: "SA",
+			},
+		});
+		const checkoutUrl = result.checkoutUrl;
+		if (!checkoutUrl) throw new Error("Checkout did not return a hosted URL");
+		const link = document.createElement("a");
+		link.href = checkoutUrl;
+		link.className = "button";
+		link.textContent = "Continue on " + provider;
+		$("checkoutLink").replaceChildren(link);
+		notice(
+			"Test checkout created. Continue using the link, then return here to inspect the result.",
+		);
+		await refresh();
+	});
+$("refresh").onclick = () => run(refresh);
+async function refresh() {
+	try {
+		state = await api("/api/demo/state");
+	} catch (error) {
+		if (error.message.includes("Sign in")) {
+			state = null;
+			$("identity").textContent = "Signed out";
+			$("signin").hidden = false;
+			return;
+		}
+		throw error;
+	}
+	$("identity").textContent =
+		state.user.name + (state.administrator ? " · administrator" : " · tester");
+	$("signin").hidden = true;
+	$("operationControls").hidden = !state.administrator;
+	$("orders").innerHTML = state.orders.length
+		? state.orders
+				.map(
+					(o) =>
+						`<tr><td>${escape(o.provider)}<br><code>${escape(o.orderReferenceId)}</code></td><td><span class="status">${escape(o.status)}</span></td><td>${(o.amountMinor / 100).toFixed(2)}</td><td>${(o.capturedAmountMinor / 100).toFixed(2)}</td><td>${(o.refundedAmountMinor / 100).toFixed(2)}</td><td>${state.administrator && o.providerOrderId ? (o.provider === "tamara" ? ["reconcile", "authorise", "capture", "refund", "cancel", "void"] : ["reconcile", "capture", "refund", "cancel", "close"]).map((action) => `<button class="small secondary" data-order="${escape(o.providerOrderId)}" data-provider="${escape(o.provider)}" data-action="${action}">${action}</button>`).join("") : state.administrator ? "Checkout pending" : "View only"}</td></tr>`,
+				)
+				.join("")
+		: '<tr><td colspan="6">Create your first sandbox purchase above.</td></tr>';
+	$("events").innerHTML = state.events.length
+		? state.events
+				.map(
+					(e) =>
+						`<tr><td>${escape(e.provider)}</td><td>${escape(e.eventKind)}</td><td>${escape(e.status)}</td><td>${e.attempts}</td><td>${state.administrator ? `<button class="small secondary" data-replay="${escape(e.id)}">Replay</button>` : "—"}</td></tr>`,
+				)
+				.join("")
+		: '<tr><td colspan="5">No deliveries yet.</td></tr>';
+	$("timeline").innerHTML = state.timeline.length
+		? state.timeline
+				.map(
+					(e) =>
+						`<li><time>${escape(new Date(e.at).toLocaleTimeString())}</time>${escape(e.provider)} · ${escape(e.kind)}<br><code>${escape(e.detail)}</code></li>`,
+				)
+				.join("")
+		: "<li>No callbacks yet.</li>";
+}
+document.addEventListener("click", (e) => {
+	const button = e.target.closest("button[data-action],button[data-replay]");
+	if (!button) return;
+	run(async () => {
+		if (button.dataset.replay) {
+			await api(
+				"/api/auth/bnpl/admin/webhook-events/" +
+					encodeURIComponent(button.dataset.replay) +
+					"/redeliver",
+				{},
+			);
+			notice("Delivery replayed. Balances should remain unchanged.");
+		} else {
+			const action = button.dataset.action;
+			let body = {};
+			if (["capture", "refund"].includes(action) || (action === "cancel" && button.dataset.provider === "tamara")) {
+				if (!$("operationAmount").reportValidity()) return;
+				body.totalAmount = { amount: $("operationAmount").value, currency: "SAR" };
+			}
+			if (["capture", "refund", "cancel"].includes(action)) {
+				if (!$("operationReference").reportValidity()) return;
+				body[action === "refund" ? "merchantRefundId" : "merchantReferenceId"] =
+					$("operationReference").value;
+				if (action === "capture")
+					body.shippingInfo = {
+						shippedAt: sessionStorage.getItem("bnpl-demo-shipped-" + $("operationReference").value) || new Date().toISOString(),
+						shippingCompany: "Sandbox digital delivery",
+					};
+			}
+			if (body.shippingInfo)
+				sessionStorage.setItem("bnpl-demo-shipped-" + $("operationReference").value, body.shippingInfo.shippedAt);
+			await api(
+				"/api/auth/bnpl/admin/orders/" + encodeURIComponent(button.dataset.order) + "/" + action,
+				body,
+			);
+			notice(action + " completed.");
+		}
+		await refresh();
+	});
+});
+const callback = new URL(location.href).searchParams.get("result");
+if (callback)
+	notice("Provider returned: " + callback + ". Reconcile the order to verify its state.");
+await refresh();
+setInterval(() => {
+	if (!busy && state) refresh().catch((error) => notice(error.message));
+}, 3000);
+</script></html>

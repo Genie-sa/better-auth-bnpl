@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	OrderStoreConflictError,
 	OrderStoreMissingError,
+	applyOrderOperation,
 	mutateOrder,
 } from "../../plugins/order-store";
 import { silentLogger } from "../_harness";
@@ -19,6 +20,7 @@ function makeFakeCtx(
 	opts: {
 		onBeforeUpdate?: (row: OrderRow) => void;
 		reportZeroOnSuccess?: boolean;
+		onAfterUpdate?: (row: OrderRow) => void;
 	} = {},
 ): {
 	ctx: GenericEndpointContext;
@@ -47,6 +49,19 @@ function makeFakeCtx(
 			if (id !== undefined && id !== row.providerOrderId) return null;
 			return { ...row } as T;
 		},
+		async incrementOne({
+			where,
+			increment,
+			set,
+		}: { where: Where[]; increment: Record<string, number>; set: Record<string, unknown> }) {
+			updateManyCalls += 1;
+			opts.onBeforeUpdate?.(row);
+			if (!matches(where)) return null;
+			row = { ...row, ...set, version: row.version + (increment.version ?? 0) } as OrderRow;
+			const applied = { ...row };
+			opts.onAfterUpdate?.(row);
+			return applied;
+		},
 		async updateMany({
 			where,
 			update,
@@ -58,6 +73,7 @@ function makeFakeCtx(
 			opts.onBeforeUpdate?.(row);
 			if (!matches(where)) return 0;
 			row = { ...row, ...update } as OrderRow;
+			opts.onAfterUpdate?.(row);
 			return opts.reportZeroOnSuccess ? 0 : 1;
 		},
 	};
@@ -80,6 +96,38 @@ describe("mutateOrder optimistic concurrency", () => {
 		capturedAmountMinor: 0,
 		version: 0,
 	};
+	it("does not reapply a successful delta when another writer commits before verification", async () => {
+		let injected = false;
+		const { ctx, row } = makeFakeCtx(base, {
+			reportZeroOnSuccess: true,
+			onAfterUpdate(current) {
+				if (!injected) {
+					injected = true;
+					current.capturedAmountMinor += 3000;
+					current.version = -1;
+				}
+			},
+		});
+		await mutateOrder<OrderRow>(ctx, orderWhere(base), (current) => ({
+			capturedAmountMinor: current.capturedAmountMinor + 1000,
+		}));
+		expect(row().capturedAmountMinor).toBe(4000);
+	});
+	it("commits an operation identity with its balance and skips a replay", async () => {
+		const { ctx, row } = makeFakeCtx(base);
+		const compute = (current: OrderRow) => ({
+			capturedAmountMinor: current.capturedAmountMinor + 5000,
+		});
+		await applyOrderOperation<OrderRow>(ctx, orderWhere(base), "tabby:captured:cap-1", compute);
+		const replay = await applyOrderOperation<OrderRow>(
+			ctx,
+			orderWhere(base),
+			"tabby:captured:cap-1",
+			compute,
+		);
+		expect(row().capturedAmountMinor).toBe(5000);
+		expect(replay.duplicate).toBe(true);
+	});
 	it("applies an update and rotates the version token with no contention", async () => {
 		const { ctx, row, updateManyCalls } = makeFakeCtx(base);
 		await mutateOrder<OrderRow>(ctx, orderWhere(base), (current) => ({
@@ -92,32 +140,6 @@ describe("mutateOrder optimistic concurrency", () => {
 	it("retries after a version conflict and lands the correct cumulative amount", async () => {
 		let injected = false;
 		const { ctx, row, updateManyCalls } = makeFakeCtx(base, {
-			onBeforeUpdate: (current) => {
-				if (!injected) {
-					injected = true;
-					current.capturedAmountMinor += 3000;
-					current.version += 1;
-				}
-			},
-		});
-		await mutateOrder<OrderRow>(ctx, orderWhere(base), (current) => ({
-			capturedAmountMinor: current.capturedAmountMinor + 5000,
-		}));
-		expect(row().capturedAmountMinor).toBe(8000);
-		expect(updateManyCalls()).toBe(2);
-	});
-	it("treats a zero return as success when the re-read shows our token (Kysely/SQLite reality)", async () => {
-		const { ctx, row, updateManyCalls } = makeFakeCtx(base, { reportZeroOnSuccess: true });
-		await mutateOrder<OrderRow>(ctx, orderWhere(base), (current) => ({
-			capturedAmountMinor: current.capturedAmountMinor + 1000,
-		}));
-		expect(row().capturedAmountMinor).toBe(1000);
-		expect(updateManyCalls()).toBe(1);
-	});
-	it("retries on a zero return when the re-read shows a foreign version", async () => {
-		let injected = false;
-		const { ctx, row, updateManyCalls } = makeFakeCtx(base, {
-			reportZeroOnSuccess: true,
 			onBeforeUpdate: (current) => {
 				if (!injected) {
 					injected = true;
