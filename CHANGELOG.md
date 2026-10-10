@@ -1,5 +1,12 @@
 # better-auth-bnpl
 
+## 0.3.1
+
+### Patch Changes
+
+- 66eae97: Preserve Better Auth server and client endpoint inference when BNPL webhooks are enabled. Keep webhook endpoint keys typed and infer client schema fields without importing an open endpoint dictionary that hides core session and sign-out methods.
+- bdba507: Scope webhook deduplication keys by provider while preserving replay of existing deliveries. Reject unsafe minor-unit amounts, invalid Tabby quantities and buyer names, unsupported Tabby currencies, inconsistent Tabby financial histories, and empty Tamara checkout IDs. Simplify the README and include the detailed integration reference in the package.
+
 ## 0.3.0
 
 ### Minor Changes
