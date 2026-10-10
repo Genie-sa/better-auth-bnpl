@@ -173,6 +173,12 @@ export function tabby(
 			input: BnplCheckoutInput,
 			ctx: ProviderContext,
 		): Promise<BnplCheckoutResult> {
+			if (!isOneOf(input.totalAmount.currency, TABBY_CURRENCIES)) {
+				throw new BnplPluginError(
+					"CURRENCY_NOT_SUPPORTED_BY_PROVIDER",
+					`tabby: currency ${input.totalAmount.currency} is not supported`,
+				);
+			}
 			const tabbyRequest = toTabbyCheckoutRequest(input, {
 				merchantCode: options.merchantCode,
 			});

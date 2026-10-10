@@ -107,6 +107,40 @@ describe("TabbyClient", () => {
 			"https://api.tabby.test/api/v2/payments/payment-id",
 		]);
 	});
+	it.each([1.5, Number.MAX_SAFE_INTEGER + 1])(
+		"rejects unsafe item quantity %s before checkout POST",
+		async (quantity) => {
+			const { client, requests } = makeClient([]);
+			await expect(
+				client.createCheckout({
+					payment: {
+						amount: "100.00",
+						currency: "SAR",
+						buyer: { name: "Buyer", email: "buyer@example.com", phone: "000000000" },
+						order: {
+							reference_id: "order-1",
+							items: [
+								{
+									reference_id: "sku-1",
+									title: "Item",
+									quantity,
+									unit_price: "100.00",
+								},
+							],
+						},
+					},
+					lang: "en",
+					merchant_code: "MERCH",
+					merchant_urls: {
+						success: "https://merchant.example/success",
+						cancel: "https://merchant.example/cancel",
+						failure: "https://merchant.example/failure",
+					},
+				}),
+			).rejects.toThrow(/request body/i);
+			expect(requests).toHaveLength(0);
+		},
+	);
 	it("serializes checkout attachment.body as JSON on the wire", async () => {
 		const { client, requests } = makeClient([
 			{

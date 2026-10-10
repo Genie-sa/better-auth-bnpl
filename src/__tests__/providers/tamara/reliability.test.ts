@@ -61,6 +61,52 @@ const providerReturning = (body: unknown) =>
 afterEach(() => vi.useRealTimers());
 
 describe("Tamara financial contracts", () => {
+	it("rejects empty checkout IDs while preserving opaque hosted checkout URLs", async () => {
+		const response = {
+			order_id: "order-1",
+			checkout_id: "checkout-1",
+			checkout_url: "https://hosted.tamara.example/session/opaque-token",
+			status: "new",
+		};
+		await expect(providerReturning(response).createCheckout(checkout, ctx)).resolves.toMatchObject({
+			providerCheckoutId: "checkout-1",
+			checkoutUrl: response.checkout_url,
+		});
+		await expect(
+			providerReturning({ ...response, checkout_id: "" }).createCheckout(checkout, ctx),
+		).rejects.toMatchObject({ name: "BnplProviderError" });
+	});
+
+	it.each([
+		{ currency: "SAR", amount: "100.01", invalid: "100.001" },
+		{ currency: "KWD", amount: "100.001", invalid: "100.0001" },
+	])(
+		"preserves integer-minor-unit history for $currency",
+		async ({ currency, amount, invalid }) => {
+			const totalAmount = { amount, currency };
+			const snapshot = {
+				order_id: "order-1",
+				order_reference_id: "reference-1",
+				status: "fully_captured",
+				total_amount: totalAmount,
+				captured_amount: totalAmount,
+				refunded_amount: { amount: currency === "SAR" ? "0.00" : "0.000", currency },
+				transactions: {
+					captures: [{ capture_id: "capture-1", total_amount: { amount, currency } }],
+					refunds: [],
+				},
+			};
+			const state = await providerReturning(snapshot).fetchOrder("order-1", ctx);
+			expect(state.capturedAmountMinor).toBe(currency === "SAR" ? 10001 : 100001);
+			await expect(
+				providerReturning({ ...snapshot, total_amount: { amount: invalid, currency } }).fetchOrder(
+					"order-1",
+					ctx,
+				),
+			).rejects.toMatchObject({ name: "BnplProviderError" });
+		},
+	);
+
 	it("returns confirmed canceled totals while preserving the original order amount", async () => {
 		const state = await providerReturning({
 			...order,
@@ -167,6 +213,21 @@ describe("Tamara financial contracts", () => {
 			{ kind: "refunded", id: "refund-1", amountMinor: 2500, currency: "SAR" },
 		]);
 	});
+	it("rejects capture and cancellation totals that exceed the original amount", async () => {
+		const snapshot = {
+			...order,
+			captured_amount: { ...money, amount: "80.00" },
+			canceled_amount: { ...money, amount: "25.00" },
+			transactions: {
+				captures: [{ capture_id: "capture-1", total_amount: { ...money, amount: "80.00" } }],
+				refunds: [],
+				cancels: [{ cancel_id: "cancel-1", total_amount: { ...money, amount: "25.00" } }],
+			},
+		};
+		await expect(providerReturning(snapshot).fetchOrder("order-1", ctx)).rejects.toMatchObject({
+			name: "BnplProviderError",
+		});
+	});
 	it.each([
 		{
 			captures: [{ capture_id: "capture-1", total_amount: { ...money, amount: "99.00" } }],
@@ -213,7 +274,9 @@ describe("Tamara financial contracts", () => {
 	])("rejects incomplete or inconsistent native transaction history %j", async (transactions) => {
 		await expect(
 			providerReturning({ ...order, transactions }).fetchOrder("order-1", ctx),
-		).rejects.toMatchObject({ name: "BnplProviderError" });
+		).rejects.toMatchObject({
+			name: "BnplProviderError",
+		});
 	});
 	it.each([
 		[
@@ -287,9 +350,12 @@ describe("Tamara financial contracts", () => {
 		expect((await providerReturning(order).fetchOrder("order-1", ctx)).operations).toBeUndefined();
 	});
 
-	it("rejects unknown statuses instead of reporting an existing paid order as new", () => {
-		expect(() => tamaraStatusToCanonical("provider_new_status")).toThrow(/status/i);
-	});
+	it.each(["provider_new_status", "CANCELED", "CAPTURED"])(
+		"rejects noncanonical native order status %s instead of inventing a mapping",
+		(status) => {
+			expect(() => tamaraStatusToCanonical(status)).toThrow(/status/i);
+		},
+	);
 	it("rejects order snapshots without confirmed financial totals", async () => {
 		const { captured_amount: _captured, ...incomplete } = order;
 		await expect(providerReturning(incomplete).fetchOrder("order-1", ctx)).rejects.toMatchObject({

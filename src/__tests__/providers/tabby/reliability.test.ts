@@ -75,6 +75,20 @@ describe("Tabby financial reliability", () => {
 			),
 		).rejects.toThrow();
 	});
+	it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+		"rejects invalid quantity %s before creating a Tabby item",
+		(quantity) => {
+			expect(() =>
+				toTabbyItem({
+					referenceId: "sku",
+					sku: "sku",
+					name: "Item",
+					quantity,
+					totalAmount: { amount: "100.00", currency: "SAR" },
+				}),
+			).toThrow(/quantity/i);
+		},
+	);
 	it("derives exact unit price from the line total", () => {
 		expect(
 			toTabbyItem({
@@ -99,6 +113,24 @@ describe("Tabby financial reliability", () => {
 	});
 	it("recognizes full refund after partial capture and close", () => {
 		expect(tabbyStatusToCanonical("CLOSED", 10000, 4000, 4000)).toBe("fully_refunded");
+	});
+	it.each([
+		{ status: "CREATED", captures: [{ id: "capture", amount: "10.00" }], refunds: [] },
+		{
+			status: "AUTHORIZED",
+			captures: [{ id: "capture", amount: "10.00" }],
+			refunds: [{ id: "refund", amount: "10.00" }],
+		},
+		{ status: "REJECTED", captures: [{ id: "capture", amount: "10.00" }], refunds: [] },
+		{
+			status: "EXPIRED",
+			captures: [{ id: "capture", amount: "10.00" }],
+			refunds: [{ id: "refund", amount: "10.00" }],
+		},
+	])("fails closed when status $status contradicts capture/refund history", (state) => {
+		expect(() => fromTabbyPaymentDetails({ ...payment, ...state }, silentLogger)).toThrow(
+			/status.*financial|financial.*status/i,
+		);
 	});
 	it("fails closed for malformed capture money", () => {
 		expect(() =>
@@ -352,6 +384,17 @@ describe("Tabby checkout financial identity", () => {
 		},
 	};
 	const other = { ...money, currency: "AED" } as const;
+	it("rejects a canonical currency unsupported by Tabby before checkout POST", async () => {
+		const fetch = vi.fn(async () => Response.json(response));
+		const money = { amount: "100.000", currency: "BHD" as const };
+		await expect(
+			tabby({ ...config, fetch }).createCheckout(
+				{ ...input, totalAmount: money, items: [{ ...item, totalAmount: money }] },
+				ctx,
+			),
+		).rejects.toThrow(/currency/i);
+		expect(fetch).not.toHaveBeenCalled();
+	});
 	it.each<Partial<BnplCheckoutInput>>([
 		{ taxAmount: other },
 		{ shippingAmount: other },

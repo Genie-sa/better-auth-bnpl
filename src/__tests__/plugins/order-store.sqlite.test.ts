@@ -6,6 +6,7 @@ import { reserveCheckoutOrder } from "../../plugins/checkout-attempt";
 import { reserveMoneyCommand } from "../../plugins/money-command";
 import { applyOrderOperation, mutateOrder } from "../../plugins/order-store";
 import { orders } from "../../plugins/orders";
+import { recordWebhookEvent } from "../../plugins/webhook-events";
 import {
 	type StoredWebhookEvent,
 	claimWebhookEvent,
@@ -117,6 +118,188 @@ async function makeSqliteCtx(): Promise<{
 	return { ctx, readRow, execRaw: (sql) => database.exec(sql) };
 }
 describe.skipIf(!hasNodeSqlite)("mutateOrder against the real SQLite adapter", () => {
+	it("keeps equal provider-local webhook keys separate", async () => {
+		const { ctx } = await makeSqliteCtx();
+		const event = {
+			kind: "captured" as const,
+			provider: "foo",
+			orderId: "order-1",
+			captureId: "capture-1",
+			amountMinor: 100,
+			currency: "SAR" as const,
+			raw: null,
+		};
+		const first = await recordWebhookEvent(ctx, {
+			provider: "foo",
+			event,
+			dedupKey: "event-1",
+			rawBody: "{}",
+		});
+		if (first.outcome !== "inserted") throw new Error("first provider event was not inserted");
+		await ctx.context.adapter.incrementOne({
+			model: "bnplWebhookEvent",
+			where: [{ field: "id", value: first.row.id }],
+			increment: {},
+			set: { status: "processed", orderApplied: true },
+		});
+		const replay = await recordWebhookEvent(ctx, {
+			provider: "foo",
+			event,
+			dedupKey: "event-1",
+			rawBody: "{}",
+		});
+		const second = await recordWebhookEvent(ctx, {
+			provider: "foo:bar",
+			event: { ...event, provider: "foo:bar", orderId: "order-2" },
+			dedupKey: "event-1",
+			rawBody: "{}",
+		});
+		expect(first.outcome).toBe("inserted");
+		expect(replay.outcome).toBe("duplicate");
+		expect(second.outcome).toBe("inserted");
+		const rows = await ctx.context.adapter.findMany<StoredWebhookEvent>({
+			model: "bnplWebhookEvent",
+			where: [{ field: "providerOrderId", value: "order-2" }],
+		});
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).toMatchObject({ provider: "foo:bar", providerOrderId: "order-2" });
+		const ownerA = await ctx.context.adapter.findOne<StoredWebhookEvent>({
+			model: "bnplWebhookEvent",
+			where: [{ field: "providerOrderId", value: "order-1" }],
+		});
+		expect(ownerA).toMatchObject({ provider: "foo", providerOrderId: "order-1" });
+	});
+	it("scopes colon-bearing provider and key pairs without ambiguity", async () => {
+		const { ctx } = await makeSqliteCtx();
+		const event = {
+			kind: "captured" as const,
+			provider: "foo",
+			orderId: "order-1",
+			captureId: "capture-1",
+			amountMinor: 100,
+			currency: "SAR" as const,
+			raw: null,
+		};
+		const first = await recordWebhookEvent(ctx, {
+			provider: "foo",
+			event,
+			dedupKey: "bar:event-2",
+			rawBody: "{}",
+		});
+		const second = await recordWebhookEvent(ctx, {
+			provider: "foo:bar",
+			event: { ...event, provider: "foo:bar", orderId: "order-2" },
+			dedupKey: "event-2",
+			rawBody: "{}",
+		});
+		expect(first.outcome).toBe("inserted");
+		expect(second.outcome).toBe("inserted");
+	});
+	it("inserts a new provider-scoped event beside a legacy key owned by another provider", async () => {
+		const { ctx } = await makeSqliteCtx();
+		await ctx.context.adapter.create({
+			model: "bnplWebhookEvent",
+			data: {
+				provider: "foo",
+				providerOrderId: "order-1",
+				eventKind: "captured",
+				eventType: "captured",
+				dedupKey: "shared-event",
+				receivedAt: new Date(),
+				status: "processed",
+				attempts: 1,
+				orderApplied: true,
+			},
+		});
+		const result = await recordWebhookEvent(ctx, {
+			provider: "bar",
+			event: {
+				kind: "captured",
+				provider: "bar",
+				orderId: "order-2",
+				captureId: "capture-2",
+				amountMinor: 200,
+				currency: "SAR",
+				raw: null,
+			},
+			dedupKey: "shared-event",
+			rawBody: "{}",
+		});
+		expect(result.outcome).toBe("inserted");
+		const foreign = await ctx.context.adapter.findOne<StoredWebhookEvent>({
+			model: "bnplWebhookEvent",
+			where: [{ field: "providerOrderId", value: "order-1" }],
+		});
+		const owned = await ctx.context.adapter.findOne<StoredWebhookEvent>({
+			model: "bnplWebhookEvent",
+			where: [{ field: "providerOrderId", value: "order-2" }],
+		});
+		expect(foreign).toMatchObject({ provider: "foo", status: "processed", orderApplied: true });
+		expect(owned).toMatchObject({
+			provider: "bar",
+			providerOrderId: "order-2",
+			status: "received",
+		});
+	});
+	it("reprocesses a concurrent same-provider insert instead of creating a second row", async () => {
+		const { ctx } = await makeSqliteCtx();
+		const input = {
+			provider: "foo",
+			event: {
+				kind: "captured" as const,
+				provider: "foo",
+				orderId: "order-1",
+				captureId: "capture-1",
+				amountMinor: 100,
+				currency: "SAR" as const,
+				raw: null,
+			},
+			dedupKey: "concurrent-event",
+			rawBody: "{}",
+		};
+		const results = await Promise.all([
+			recordWebhookEvent(ctx, input),
+			recordWebhookEvent(ctx, input),
+		]);
+		expect(results.map((result) => result.outcome).sort()).toEqual(["inserted", "reprocess"]);
+		const rows = await ctx.context.adapter.findMany<StoredWebhookEvent>({
+			model: "bnplWebhookEvent",
+			where: [{ field: "provider", value: "foo" }],
+		});
+		expect(rows).toHaveLength(1);
+	});
+	it("still classifies an existing provider-owned legacy key for safe redelivery", async () => {
+		const { ctx } = await makeSqliteCtx();
+		await ctx.context.adapter.create({
+			model: "bnplWebhookEvent",
+			data: {
+				provider: "foo",
+				providerOrderId: "order-1",
+				eventKind: "captured",
+				eventType: "captured",
+				dedupKey: "legacy-event",
+				receivedAt: new Date(),
+				status: "processed",
+				attempts: 1,
+				orderApplied: true,
+			},
+		});
+		const result = await recordWebhookEvent(ctx, {
+			provider: "foo",
+			event: {
+				kind: "captured",
+				provider: "foo",
+				orderId: "order-1",
+				captureId: "capture-1",
+				amountMinor: 100,
+				currency: "SAR",
+				raw: null,
+			},
+			dedupKey: "legacy-event",
+			rawBody: "{}",
+		});
+		expect(result.outcome).toBe("duplicate");
+	});
 	it("reserves only one concurrent order mutation across cancel and capture", async () => {
 		const { ctx, readRow } = await makeSqliteCtx();
 		const outcomes = await Promise.allSettled([

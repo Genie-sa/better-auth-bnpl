@@ -98,18 +98,19 @@ describe("toTabbyBuyer", () => {
 			phone: "+971500000000",
 		});
 	});
-	it("sends an empty name when the buyer has no name", () => {
-		expect(
+	it("allows a single-part Unicode name", () => {
+		expect(toTabbyBuyer({ ...baseCheckout.buyer, firstName: "نور", lastName: " " }).name).toBe(
+			"نور",
+		);
+	});
+	it("rejects a buyer without the full name required by Tabby", () => {
+		expect(() =>
 			toTabbyBuyer({
 				...baseCheckout.buyer,
 				firstName: " ",
 				lastName: " ",
 			}),
-		).toMatchObject({
-			name: "",
-			email: "ali@example.com",
-			phone: "+971500000000",
-		});
+		).toThrow(/name/i);
 	});
 });
 describe("toTabbyCheckoutRequest", () => {

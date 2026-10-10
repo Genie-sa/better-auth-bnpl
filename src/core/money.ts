@@ -109,6 +109,13 @@ export function formatAmount(minor: number, currency: string): BnplMoney {
 			minor,
 		);
 	}
+	if (!Number.isSafeInteger(minor)) {
+		throw new BnplMoneyParseError(
+			"AMOUNT_TOO_LARGE",
+			"Minor-unit amount exceeds the safe-integer range",
+			minor,
+		);
+	}
 	const exponent = CURRENCY_MINOR_UNIT_EXPONENT[currency];
 	const multiplier = 10 ** exponent;
 	const whole = Math.trunc(minor / multiplier);

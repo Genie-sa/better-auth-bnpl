@@ -87,6 +87,7 @@
 		"dist",
 		"skills",
 		"README.md",
+		"docs/integration.md",
 		"LICENSE"
 	],
 	"keywords": [
