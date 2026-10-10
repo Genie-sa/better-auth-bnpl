@@ -278,9 +278,12 @@ export type BnplClientProviderInput = Record<string, BnplProvider> | string;
 export type BnplClientProviderIds<Input extends BnplClientProviderInput> = Input extends string
 	? Input
 	: keyof Input & string;
-export type BnplClientPlugin<Providers extends BnplClientProviderInput> = BetterAuthClientPlugin & {
+export type BnplClientPlugin<Providers extends BnplClientProviderInput> = Omit<
+	BetterAuthClientPlugin,
+	"$InferServerPlugin"
+> & {
 	id: "bnpl-client";
-	$InferServerPlugin: ReturnType<typeof bnpl>;
+	$InferServerPlugin: Pick<ReturnType<typeof bnpl>, "id" | "schema" | "$Infer">;
 	getActions: ($fetch: BnplClientFetch) => BnplClientActions<BnplClientProviderIds<Providers>>;
 };
 export function bnplClient<

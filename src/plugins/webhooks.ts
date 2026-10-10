@@ -19,7 +19,7 @@ import {
 	deriveRefundedStatus,
 } from "../core/status";
 import type { BnplOrderState, BnplWebhookEvent } from "../core/types";
-import type { BnplEndpointRecord, BnplOptions } from "../plugin-types";
+import type { BnplOptions } from "../plugin-types";
 import { type AdminAuthorizer, assertAdmin } from "./admin";
 import { buildAuthoriseOrderUpdate } from "./authorise-update";
 import {
@@ -166,7 +166,7 @@ function webhookOrderWhere(providerId: string, providerOrderId: string): Where[]
 }
 export const webhooks = (webhookOptions: WebhooksSubpluginOptions = {}) => {
 	return (providers: Record<string, BnplProvider>, options: BnplOptions) => {
-		const endpoints: BnplEndpointRecord = {
+		const endpoints = {
 			bnplWebhook: createAuthEndpoint(
 				"/bnpl/webhooks/:provider",
 				{
@@ -290,18 +290,22 @@ export const webhooks = (webhookOptions: WebhooksSubpluginOptions = {}) => {
 				},
 			),
 		};
-		if (webhookOptions.redelivery) {
-			endpoints.bnplListWebhookEvents = buildListWebhookEventsEndpoint(
-				webhookOptions.redelivery,
-				options,
-			);
-			endpoints.bnplRedeliverWebhookEvent = buildRedeliverWebhookEventEndpoint(
-				providers,
-				webhookOptions,
-				options,
-			);
-		}
-		return endpoints;
+		return {
+			...endpoints,
+			...(webhookOptions.redelivery
+				? {
+						bnplListWebhookEvents: buildListWebhookEventsEndpoint(
+							webhookOptions.redelivery,
+							options,
+						),
+						bnplRedeliverWebhookEvent: buildRedeliverWebhookEventEndpoint(
+							providers,
+							webhookOptions,
+							options,
+						),
+					}
+				: {}),
+		};
 	};
 };
 const listWebhookEventsQuerySchema = z

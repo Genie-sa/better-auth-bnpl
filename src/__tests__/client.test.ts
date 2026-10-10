@@ -94,7 +94,7 @@ describe("bnplClient()", () => {
 		const plugin = bnplClient<"tamara" | "tabby">();
 		expect(plugin.id).toBe("bnpl-client");
 		expectTypeOf<(typeof plugin)["$InferServerPlugin"]>().toHaveProperty("id");
-		expectTypeOf<(typeof plugin)["$InferServerPlugin"]>().toHaveProperty("endpoints");
+		expectTypeOf<(typeof plugin)["$InferServerPlugin"]>().toHaveProperty("schema");
 	});
 });
 describe("bnplClient() { data, error } convention", () => {
