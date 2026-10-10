@@ -33,7 +33,7 @@ export const tabbyShippingAddressRequestSchema = z.object({
 export const tabbyOrderItemRequestSchema = z.object({
 	reference_id: nonEmptyStringSchema,
 	title: nonEmptyStringSchema,
-	quantity: z.number().positive(),
+	quantity: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
 	unit_price: decimalStringSchema,
 	category: z.string().optional(),
 	description: z.string().optional(),
@@ -79,7 +79,7 @@ const tabbyOrderItemHistorySchema = z
 		reference_id: z.string().optional(),
 		title: z.string().optional(),
 		description: z.string().optional(),
-		quantity: z.number().positive(),
+		quantity: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
 		unit_price: nonNegativeDecimalStringSchema,
 		discount_amount: nonNegativeDecimalStringSchema,
 		image_url: absoluteUrlMax1024Schema.optional(),

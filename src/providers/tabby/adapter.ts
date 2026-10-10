@@ -60,6 +60,7 @@ function readPaymentRecords(value: unknown): TabbyCaptureRecord[] {
 }
 export function toTabbyBuyer(buyer: BnplBuyer): TabbyBuyer {
 	const fullName = `${buyer.firstName} ${buyer.lastName}`.trim();
+	if (!fullName) throw new BnplProviderError(PROVIDER_ID, "buyer name is required by Tabby");
 	return {
 		name: fullName,
 		email: buyer.email,
@@ -434,6 +435,16 @@ export function fromTabbyPaymentDetails(
 	const refundedMinor = sumRefundsMinor(payment.refunds, payment.currency, logger);
 	if (capturedMinor > totalMinor || refundedMinor > capturedMinor) {
 		throw new BnplProviderError("tabby", "payment financial totals are inconsistent");
+	}
+	const normalizedStatus = normalizeTabbyPaymentStatus(payment.status);
+	if (
+		((normalizedStatus === "CREATED" ||
+			normalizedStatus === "REJECTED" ||
+			normalizedStatus === "EXPIRED") &&
+			(capturedMinor > 0 || refundedMinor > 0)) ||
+		(normalizedStatus === "AUTHORIZED" && refundedMinor > 0)
+	) {
+		throw new BnplProviderError("tabby", "payment status and financial history are inconsistent");
 	}
 	return {
 		totalMinor,

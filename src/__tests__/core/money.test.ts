@@ -115,6 +115,15 @@ describe("BNPL money", () => {
 		it("rejects non-integer minor units", () => {
 			expect(() => formatAmount(99.5, "SAR")).toThrow(BnplMoneyParseError);
 		});
+		it("preserves the largest safe minor-unit amount", () => {
+			expect(formatAmount(Number.MAX_SAFE_INTEGER, "SAR")).toEqual({
+				amount: "90071992547409.91",
+				currency: "SAR",
+			});
+		});
+		it("rejects unsafe minor units instead of serializing imprecise money", () => {
+			expect(() => formatAmount(Number.MAX_SAFE_INTEGER + 1, "SAR")).toThrow(BnplMoneyParseError);
+		});
 	});
 	describe("isBnplCurrency", () => {
 		it("narrows to BnplCurrency for known values", () => {

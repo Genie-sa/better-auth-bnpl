@@ -68,14 +68,39 @@ async function findEventByDedupKey(
 		where: [{ field: "dedupKey", value: dedupKey }],
 	});
 }
+function storageDedupKey(provider: string, dedupKey: string): string {
+	return JSON.stringify([provider, dedupKey]);
+}
+async function findProviderEvent(
+	ctx: GenericEndpointContext,
+	provider: string,
+	dedupKey: string,
+): Promise<{ row: StoredWebhookEvent | null; error?: Error }> {
+	const storedKey = storageDedupKey(provider, dedupKey);
+	const scoped = await findEventByDedupKey(ctx, storedKey);
+	if (scoped) {
+		return scoped.provider === provider
+			? { row: scoped }
+			: {
+					row: null,
+					error: new Error("bnpl: scoped webhook dedup key belongs to another provider"),
+				};
+	}
+	// Preserve deliveries recorded before keys were scoped by provider.
+	const legacy = await findEventByDedupKey(ctx, dedupKey);
+	if (legacy?.provider === provider) return { row: legacy };
+	return { row: null };
+}
 export async function recordWebhookEvent(
 	ctx: GenericEndpointContext,
 	input: InsertWebhookEventInput,
 ): Promise<RecordWebhookEventResult> {
 	const orderId = eventOrderId(input.event);
 	if (!orderId) return { outcome: "unrecordable" };
-	const existing = await findEventByDedupKey(ctx, input.dedupKey);
-	if (existing) return classifyExisting(existing);
+	const dedupKey = storageDedupKey(input.provider, input.dedupKey);
+	const existing = await findProviderEvent(ctx, input.provider, input.dedupKey);
+	if (existing.error) return { outcome: "infra-error", error: existing.error };
+	if (existing.row) return classifyExisting(existing.row);
 	try {
 		const created = await ctx.context.adapter.create<StoredWebhookEvent>({
 			model: "bnplWebhookEvent",
@@ -85,7 +110,7 @@ export async function recordWebhookEvent(
 				providerOrderReferenceId: eventReferenceId(input.event),
 				eventKind: input.event.kind,
 				eventType: eventType(input.event),
-				dedupKey: input.dedupKey,
+				dedupKey,
 				receivedAt: new Date(),
 				rawData: input.rawBody,
 				status: "received",
@@ -95,8 +120,9 @@ export async function recordWebhookEvent(
 		});
 		return { outcome: "inserted", row: created };
 	} catch (createError) {
-		const raced = await findEventByDedupKey(ctx, input.dedupKey);
-		if (raced) return classifyExisting(raced);
+		const raced = await findProviderEvent(ctx, input.provider, input.dedupKey);
+		if (raced.error) return { outcome: "infra-error", error: raced.error };
+		if (raced.row) return classifyExisting(raced.row);
 		ctx.context.logger.error(
 			`bnpl: failed to record webhook event ${input.dedupKey} and no row exists — treating as infrastructural: ${createError instanceof Error ? createError.message : createError}`,
 		);
@@ -199,9 +225,14 @@ export async function recordSyntheticProviderEvent(
 	if (!provider.webhookDedupKey) return;
 	const orderId = eventOrderId(event);
 	if (!orderId) return;
-	const dedupKey = provider.webhookDedupKey(event);
-	const existing = await findEventByDedupKey(ctx, dedupKey);
-	if (existing) return;
+	const rawDedupKey = provider.webhookDedupKey(event);
+	const dedupKey = storageDedupKey(provider.id, rawDedupKey);
+	const existing = await findProviderEvent(ctx, provider.id, rawDedupKey);
+	if (existing.error) {
+		ctx.context.logger.error(`bnpl: ${existing.error.message}`);
+		return;
+	}
+	if (existing.row) return;
 	try {
 		await ctx.context.adapter.create<StoredWebhookEvent>({
 			model: "bnplWebhookEvent",

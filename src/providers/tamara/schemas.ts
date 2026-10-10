@@ -193,7 +193,7 @@ export const tamaraUpdateReferenceIdRequestSchema = z.object({
 export const tamaraCheckoutResponseSchema = z
 	.object({
 		order_id: nonEmptyStringSchema,
-		checkout_id: z.string(),
+		checkout_id: nonEmptyStringSchema,
 		checkout_url: absoluteUrlSchema,
 		status: z.string(),
 	})
