@@ -48,6 +48,7 @@ describe("bnplClient()", () => {
 		const orderByReferencePromise = actions.bnpl.getOrderByReferenceId("ref_1");
 		const listPromise = actions.bnpl.listOrders();
 		const capturePromise = actions.bnpl.admin.capture("ord_1", {
+			merchantReferenceId: "client-operation-1",
 			totalAmount: { amount: "100.00", currency: "SAR" },
 		});
 		const reconcilePromise = actions.bnpl.admin.reconcile("ord_1");
@@ -164,6 +165,7 @@ describe("bnplClient() { data, error } convention", () => {
 		expect(namespaced.data).toBeNull();
 		expect(namespaced.error?.code).toBe("PROVIDER_NOT_CONFIGURED");
 		const captured = await actions.bnpl.admin.capture("ord_1", {
+			merchantReferenceId: "client-operation-1",
 			totalAmount: { amount: "100.00", currency: "SAR" },
 		});
 		expect(captured.data).toBeNull();
@@ -454,9 +456,11 @@ describe("bnplClient() endpoint contract", () => {
 		const listRes = await actions.bnpl.listOrders({ provider: "tamara", limit: 10, offset: 0 });
 		expect(listRes.data?.orders).toEqual([]);
 		await actions.bnpl.admin.capture("ord/1", {
+			merchantReferenceId: "client-operation-1",
 			totalAmount: { amount: "100.00", currency: "SAR" },
 		});
 		await actions.bnpl.admin.refund("ord/1", {
+			merchantRefundId: "client-operation-1",
 			totalAmount: { amount: "100.00", currency: "SAR" },
 		});
 		await actions.bnpl.admin.cancel("ord/1", {

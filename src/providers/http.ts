@@ -5,7 +5,7 @@ import type { ProviderFetch } from "../core/provider";
 export type ProviderHttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 export const DEFAULT_PROVIDER_TIMEOUT_MS = 15000;
 const MAX_GET_RETRIES = 2;
-const RETRYABLE_STATUS = new Set([429, 502, 503, 504]);
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 const BASE_BACKOFF_MS = 250;
 export type SleepFn = (ms: number) => Promise<void>;
 const realSleep: SleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -43,6 +43,14 @@ function backoffDelayMs(attempt: number): number {
 	const ceiling = BASE_BACKOFF_MS * 2 ** attempt;
 	return Math.floor(Math.random() * ceiling);
 }
+function retryAfterDelayMs(value: string | null): number | null {
+	if (value === null) return null;
+	const normalized = value.trim();
+	if (/^\d+$/.test(normalized)) return Number(normalized) * 1000;
+	if (!/^[A-Za-z]/.test(normalized)) return null;
+	const date = Date.parse(normalized);
+	return Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
+}
 async function requestProviderRaw<TBodySchema extends z.ZodTypeAny | undefined = undefined>(
 	request: ProviderRequest<TBodySchema>,
 ): Promise<unknown> {
@@ -59,6 +67,13 @@ async function requestProviderRaw<TBodySchema extends z.ZodTypeAny | undefined =
 		label,
 	} = request;
 	const timeoutMs = request.timeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS;
+	if (!Number.isInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2147483647) {
+		throw new BnplProviderError(
+			provider,
+			"provider timeout must be a positive integer within the timer range",
+		);
+	}
+	const deadline = Date.now() + timeoutMs;
 	const sleep = request.sleep ?? realSleep;
 	const serializedBody = serializeProviderRequestBody({
 		provider,
@@ -74,12 +89,20 @@ async function requestProviderRaw<TBodySchema extends z.ZodTypeAny | undefined =
 	const what = label ?? `${method} ${path}`;
 	let lastError: BnplProviderError | undefined;
 	for (let attempt = 0; attempt < maxAttempts; attempt++) {
+		const remainingMs = deadline - Date.now();
+		if (remainingMs <= 0) {
+			throw (
+				lastError ??
+				new BnplProviderError(provider, `${providerName} ${what} timed out after ${timeoutMs}ms`)
+			);
+		}
+		const signal = AbortSignal.timeout(remainingMs);
 		try {
 			const res = await fetchImpl(url, {
 				method,
 				headers,
 				body: serializedBody,
-				signal: AbortSignal.timeout(timeoutMs),
+				signal,
 			});
 			const text = await res.text();
 			const parsed = text ? safeJsonParse(text) : null;
@@ -92,8 +115,11 @@ async function requestProviderRaw<TBodySchema extends z.ZodTypeAny | undefined =
 					body: parsed ?? text,
 				});
 				if (attempt + 1 < maxAttempts && RETRYABLE_STATUS.has(res.status)) {
+					const delay =
+						retryAfterDelayMs(res.headers.get("Retry-After")) ?? backoffDelayMs(attempt);
+					if (delay >= deadline - Date.now()) throw error;
 					lastError = error;
-					await sleep(backoffDelayMs(attempt));
+					await sleep(delay);
 					continue;
 				}
 				throw error;
@@ -101,14 +127,16 @@ async function requestProviderRaw<TBodySchema extends z.ZodTypeAny | undefined =
 			return parsed;
 		} catch (err) {
 			if (err instanceof BnplProviderError) throw err;
-			const timedOut = isTimeoutError(err);
+			const timedOut = signal.aborted || isTimeoutError(err);
 			const message = timedOut
 				? `${providerName} ${what} timed out after ${timeoutMs}ms`
 				: `${providerName} ${what} request failed: ${err instanceof Error ? err.message : String(err)}`;
 			const error = new BnplProviderError(provider, message, { cause: err });
 			if (attempt + 1 < maxAttempts) {
+				const delay = backoffDelayMs(attempt);
+				if (delay >= deadline - Date.now()) throw error;
 				lastError = error;
-				await sleep(backoffDelayMs(attempt));
+				await sleep(delay);
 				continue;
 			}
 			throw error;

@@ -117,3 +117,71 @@ describe("requestProvider retries", () => {
 		}
 	});
 });
+describe("bounded provider retry policy", () => {
+	it("retries a transient 500 GET with the same request", async () => {
+		const fetchImpl = vi
+			.fn<ProviderFetch>()
+			.mockResolvedValueOnce(jsonResponse({ error: "internal" }, 500))
+			.mockResolvedValueOnce(jsonResponse({ ok: true }));
+		expect(await callJson(fetchImpl)).toEqual({ ok: true });
+		expect(fetchImpl).toHaveBeenCalledTimes(2);
+	});
+	it("honors Retry-After seconds on a rate-limited GET", async () => {
+		const sleep = vi.fn<SleepFn>(async () => undefined);
+		const fetchImpl = vi
+			.fn<ProviderFetch>()
+			.mockResolvedValueOnce(
+				new Response('{"error":"limited"}', { status: 429, headers: { "retry-after": "2" } }),
+			)
+			.mockResolvedValueOnce(jsonResponse({ ok: true }));
+		expect(await callJson(fetchImpl, { sleep })).toEqual({ ok: true });
+		expect(sleep).toHaveBeenCalledWith(2000);
+	});
+	it("honors Retry-After HTTP date", async () => {
+		const now = 1800000000000;
+		const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+		try {
+			const sleep = vi.fn<SleepFn>(async () => undefined);
+			const fetchImpl = vi
+				.fn<ProviderFetch>()
+				.mockResolvedValueOnce(
+					new Response('{"error":"limited"}', {
+						status: 503,
+						headers: { "retry-after": new Date(now + 3000).toUTCString() },
+					}),
+				)
+				.mockResolvedValueOnce(jsonResponse({ ok: true }));
+			expect(await callJson(fetchImpl, { sleep })).toEqual({ ok: true });
+			expect(sleep).toHaveBeenCalledWith(3000);
+		} finally {
+			clock.mockRestore();
+		}
+	});
+	it("does not retry early when Retry-After exceeds the total timeout budget", async () => {
+		const sleep = vi.fn<SleepFn>(async () => undefined);
+		const fetchImpl = vi
+			.fn<ProviderFetch>()
+			.mockResolvedValue(
+				new Response('{"error":"limited"}', { status: 429, headers: { "retry-after": "60" } }),
+			);
+		await expect(callJson(fetchImpl, { timeoutMs: 1000, sleep })).rejects.toMatchObject({
+			status: 429,
+		});
+		expect(fetchImpl).toHaveBeenCalledTimes(1);
+		expect(sleep).not.toHaveBeenCalled();
+	});
+	it("does not begin a new attempt after the request deadline", async () => {
+		let now = 1800000000000;
+		const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+		try {
+			const fetchImpl = vi.fn<ProviderFetch>(async () => {
+				now += 100;
+				throw new TypeError("connection reset");
+			});
+			await expect(callJson(fetchImpl, { timeoutMs: 100 })).rejects.toThrow();
+			expect(fetchImpl).toHaveBeenCalledTimes(1);
+		} finally {
+			clock.mockRestore();
+		}
+	});
+});

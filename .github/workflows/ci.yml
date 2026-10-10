@@ -52,6 +52,7 @@ jobs:
         run: pnpm openapi:check
 
   better-auth-floor:
+    # Keep the legacy check name required by repository rules; test the current floor below.
     name: better-auth 1.5.0 (peer floor)
     runs-on: ubuntu-latest
     steps:
@@ -70,7 +71,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Pin better-auth to the peer floor
-        run: pnpm add --save-dev better-auth@1.5.0
+        run: pnpm add --save-dev better-auth@1.6.23
 
       - name: Typecheck
         run: pnpm typecheck

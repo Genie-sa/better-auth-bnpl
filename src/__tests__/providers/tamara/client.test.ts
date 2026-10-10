@@ -26,7 +26,7 @@ const preCheckoutEligibilityBodySchema = z.object({
 		currency: z.literal("SAR"),
 	}),
 	customer: z.object({
-		phone: z.string(),
+		phone_number: z.string(),
 	}),
 });
 interface CapturedRequest {
@@ -290,12 +290,12 @@ describe("TamaraClient", () => {
 				currency: "SAR",
 			},
 			customer: {
-				phone: "+966500000000",
+				phone_number: "+966500000000",
 			},
 		});
 		expect(requestBody).toEqual({
 			order: { amount: 120, currency: "SAR" },
-			customer: { phone: "+966500000000" },
+			customer: { phone_number: "+966500000000" },
 		});
 		expect(result.is_eligible).toBe(true);
 	});

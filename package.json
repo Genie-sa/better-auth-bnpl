@@ -116,15 +116,15 @@
 	"author": "Ali Dhamen",
 	"license": "MIT",
 	"peerDependencies": {
-		"better-auth": "^1.5.0",
+		"better-auth": "^1.6.23",
 		"zod": "^3.24.0 || ^4"
 	},
 	"devDependencies": {
-		"@changesets/cli": "^2.31.0",
 		"@biomejs/biome": "^1.9.4",
+		"@changesets/cli": "^2.31.0",
 		"@types/node": "^20.0.0",
 		"@vitest/coverage-v8": "^2.1.9",
-		"better-auth": "^1.4.18",
+		"better-auth": "^1.7.7",
 		"openapi-typescript": "^7.13.0",
 		"pkg-pr-new": "^0.0.75",
 		"tsup": "^8.5.1",

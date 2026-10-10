@@ -1,5 +1,5 @@
 import { BnplPluginError, BnplProviderError } from "../../core/errors";
-import { isOneOf } from "../../core/guards";
+import { isOneOf, isRecord } from "../../core/guards";
 import { parseJsonObject } from "../../core/json";
 import type { BnplCurrency } from "../../core/money";
 import { formatAmount, parseAmount } from "../../core/money";
@@ -26,15 +26,16 @@ import type {
 } from "../../core/types";
 import {
 	fromTabbyPaymentDetails,
-	tabbyDedupKey,
 	tabbyProductKeyForPaymentType,
+	tabbySnapshotDedupKey,
 	tabbyToCanonicalEvent,
+	tabbyToCanonicalEvents,
 	tabbyWebhookDedupKeyForEvent,
 	toTabbyCheckoutRequest,
 	toTabbyItem,
 } from "./adapter";
 import { TabbyClient, type TabbyEnvironment } from "./client";
-import type { TabbyCheckoutResponse } from "./types";
+import type { TabbyCaptureRecord, TabbyCheckoutResponse, TabbyPaymentDetails } from "./types";
 import { type TabbyWebhookSecretConfig, verifyTabbyHeaderSecret } from "./webhook-verify";
 export const TABBY_COUNTRY_CODES = ["SA", "AE", "KW"] as const;
 export type TabbyCountryCode = (typeof TABBY_COUNTRY_CODES)[number];
@@ -96,6 +97,37 @@ function requireTabbyReferenceId(
 		`tabby: ${field} is required because Tabby's ${operation} API requires reference_id for idempotency`,
 	);
 }
+function operationRecord(
+	payment: TabbyPaymentDetails,
+	providerOrderId: string,
+	referenceId: string,
+	money: BnplCaptureArgs["totalAmount"],
+	operation: "capture" | "refund",
+): { record: TabbyCaptureRecord; amountMinor: number } {
+	if (payment.id !== providerOrderId || payment.currency !== money.currency) {
+		throw new BnplProviderError(
+			"tabby",
+			`${operation} response payment identity or currency mismatch`,
+		);
+	}
+	const records = operation === "capture" ? payment.captures : payment.refunds;
+	const matches = records?.filter((record) => record.reference_id === referenceId) ?? [];
+	const record = matches[0];
+	if (matches.length !== 1 || !record?.id) {
+		throw new BnplProviderError(
+			"tabby",
+			`${operation} response missing unique matching operation record`,
+		);
+	}
+	const amountMinor = parseAmount({ amount: record.amount, currency: payment.currency });
+	if (amountMinor !== parseAmount(money)) {
+		throw new BnplProviderError(
+			"tabby",
+			`${operation} reference was applied with a different amount`,
+		);
+	}
+	return { record, amountMinor };
+}
 export function tabby(
 	options: TabbyOptions,
 ): BnplProvider<"tabby", TabbyCaptureArgs, TabbyRefundArgs> {
@@ -114,6 +146,14 @@ export function tabby(
 		headerName: options.webhookHeader.name,
 		headerValue: options.webhookHeader.value,
 	};
+	async function closePayment(providerOrderId: string, ctx: ProviderContext): Promise<void> {
+		const payment = await client.closePayment(providerOrderId);
+		if (payment.id !== providerOrderId)
+			throw new BnplProviderError("tabby", "closed payment identity mismatch");
+		if (payment.status.toUpperCase() !== "CLOSED")
+			throw new BnplProviderError("tabby", "payment was not closed");
+		fromTabbyPaymentDetails(payment, ctx.logger);
+	}
 	return {
 		id: "tabby",
 		display,
@@ -125,27 +165,82 @@ export function tabby(
 			partialCapture: true,
 			partialRefund: true,
 			multipleCaptures: true,
-			disputes: true,
+			disputes: false,
 		},
 		supportedCountries: TABBY_COUNTRY_CODES,
 		supportedCurrencies: TABBY_CURRENCIES,
-		async createCheckout(input: BnplCheckoutInput): Promise<BnplCheckoutResult> {
+		async createCheckout(
+			input: BnplCheckoutInput,
+			ctx: ProviderContext,
+		): Promise<BnplCheckoutResult> {
 			const tabbyRequest = toTabbyCheckoutRequest(input, {
 				merchantCode: options.merchantCode,
 			});
 			const response = await client.createCheckout(tabbyRequest);
-			return mapCheckoutResponse(response, tabbyProductKeyForPaymentType(input.paymentType));
+			const payment = response.payment;
+			const derived = fromTabbyPaymentDetails(payment, ctx.logger);
+			if (
+				payment.currency !== input.totalAmount.currency ||
+				derived.totalMinor !== parseAmount(input.totalAmount) ||
+				(isRecord(payment.order) &&
+					payment.order.reference_id !== undefined &&
+					payment.order.reference_id !== input.orderReferenceId)
+			)
+				throw new BnplProviderError("tabby", "checkout response financial identity mismatch", {
+					body: response,
+				});
+			const result = mapCheckoutResponse(
+				response,
+				tabbyProductKeyForPaymentType(input.paymentType),
+			);
+			if (
+				result.status !== "declined" &&
+				(response.status !== "created" ||
+					payment.status.toUpperCase() !== "CREATED" ||
+					derived.capturedMinor !== 0 ||
+					derived.refundedMinor !== 0)
+			)
+				throw new BnplProviderError(
+					"tabby",
+					"checkout response is not an unfunded created payment",
+					{
+						body: response,
+					},
+				);
+			return result;
 		},
 		async fetchOrder(providerOrderId: string, ctx: ProviderContext): Promise<BnplOrderState> {
 			const payment = await client.getPayment(providerOrderId);
+			if (payment.id !== providerOrderId)
+				throw new BnplProviderError("tabby", "retrieved payment identity mismatch");
 			const derived = fromTabbyPaymentDetails(payment, ctx.logger);
 			return {
 				providerOrderId: payment.id,
-				orderReferenceId: undefined,
+				orderReferenceId:
+					typeof payment.order === "object" &&
+					payment.order !== null &&
+					"reference_id" in payment.order &&
+					typeof payment.order.reference_id === "string"
+						? payment.order.reference_id
+						: undefined,
 				status: derived.status,
 				totalAmount: formatAmount(derived.totalMinor, payment.currency),
 				capturedAmountMinor: derived.capturedMinor,
 				refundedAmountMinor: derived.refundedMinor,
+				operations: [
+					...(payment.captures ?? []).map((record) => ({
+						id: record.id,
+						kind: "captured" as const,
+						amountMinor: parseAmount({ amount: record.amount, currency: payment.currency }),
+						currency: formatAmount(0, payment.currency).currency,
+					})),
+					...(payment.refunds ?? []).map((record) => ({
+						id: record.id,
+						kind: "refunded" as const,
+						amountMinor: parseAmount({ amount: record.amount, currency: payment.currency }),
+						currency: formatAmount(0, payment.currency).currency,
+					})),
+				],
 				raw: payment,
 			};
 		},
@@ -155,6 +250,8 @@ export function tabby(
 			ctx: ProviderContext,
 		): Promise<BnplCaptureResult> {
 			const referenceId = requireTabbyReferenceId(args.merchantReferenceId, "capture");
+			if (parseAmount(args.totalAmount) <= 0)
+				throw new BnplProviderError("tabby", "capture amount must be positive");
 			const response = await client.capture(providerOrderId, {
 				amount: args.totalAmount.amount,
 				reference_id: referenceId,
@@ -163,20 +260,20 @@ export function tabby(
 				discount_amount: args.discountAmount?.amount,
 				items: args.items?.map(toTabbyItem),
 			});
-			const captures = response.captures ?? [];
-			const latest = captures[captures.length - 1];
-			if (!latest) {
-				throw new BnplProviderError("tabby", "capture response missing capture record", {
-					body: response,
-				});
-			}
+			const { record: latest, amountMinor } = operationRecord(
+				response,
+				providerOrderId,
+				referenceId,
+				args.totalAmount,
+				"capture",
+			);
 			ctx.logger.info(
 				`tabby: captured ${args.totalAmount.amount} ${args.totalAmount.currency} for ${providerOrderId} (capture_id=${latest.id})`,
 			);
 			return {
 				captureId: latest.id,
 				providerOrderId: response.id,
-				amountMinor: parseAmount(args.totalAmount),
+				amountMinor,
 				raw: response,
 			};
 		},
@@ -186,35 +283,55 @@ export function tabby(
 			ctx: ProviderContext,
 		): Promise<BnplRefundResult> {
 			const referenceId = requireTabbyReferenceId(args.merchantRefundId, "refund");
+			if (parseAmount(args.totalAmount) <= 0)
+				throw new BnplProviderError("tabby", "refund amount must be positive");
 			const response = await client.refund(providerOrderId, {
 				amount: args.totalAmount.amount,
 				reference_id: referenceId,
 				reason: args.comment,
 				items: args.items?.map(toTabbyItem),
 			});
-			const refunds = response.refunds ?? [];
-			const latest = refunds[refunds.length - 1];
-			if (!latest) {
-				throw new BnplProviderError("tabby", "refund response missing refund record", {
-					body: response,
-				});
-			}
+			const { record: latest, amountMinor } = operationRecord(
+				response,
+				providerOrderId,
+				referenceId,
+				args.totalAmount,
+				"refund",
+			);
 			ctx.logger.info(
 				`tabby: refunded ${args.totalAmount.amount} ${args.totalAmount.currency} for ${providerOrderId} (refund_id=${latest.id})`,
 			);
 			return {
 				refundId: latest.id,
 				providerOrderId: response.id,
-				amountMinor: parseAmount(args.totalAmount),
+				amountMinor,
 				raw: response,
 			};
 		},
-		async cancel(providerOrderId: string, _args: BnplCancelArgs): Promise<void> {
-			await client.closePayment(providerOrderId);
+		async cancel(
+			providerOrderId: string,
+			args: BnplCancelArgs,
+			ctx: ProviderContext,
+		): Promise<void> {
+			if (args.totalAmount) {
+				const payment = await client.getPayment(providerOrderId);
+				if (payment.id !== providerOrderId)
+					throw new BnplProviderError("tabby", "cancel payment identity mismatch");
+				const derived = fromTabbyPaymentDetails(payment, ctx.logger);
+				const amountMinor = parseAmount(args.totalAmount);
+				if (
+					args.totalAmount.currency !== payment.currency ||
+					amountMinor <= 0 ||
+					amountMinor !== derived.totalMinor - derived.capturedMinor
+				)
+					throw new BnplProviderError(
+						"tabby",
+						"cancel must cover the full uncaptured balance in the payment currency",
+					);
+			}
+			await closePayment(providerOrderId, ctx);
 		},
-		async closePayment(providerPaymentId: string): Promise<void> {
-			await client.closePayment(providerPaymentId);
-		},
+		closePayment,
 		async verifyWebhook(req: WebhookRequest): Promise<BnplVerifyWebhookResult> {
 			const result = verifyTabbyHeaderSecret(req.headers, webhookConfig);
 			if (!result.ok) return result;
@@ -223,12 +340,15 @@ export function tabby(
 			return {
 				ok: true,
 				payload: parsed.data,
-				dedupKey: tabbyDedupKey(parsed.data),
+				dedupKey: tabbySnapshotDedupKey(parsed.data),
 				rawBody: req.rawBody,
 			};
 		},
 		webhookDedupKey(event: BnplWebhookEvent): string {
 			return tabbyWebhookDedupKeyForEvent(event);
+		},
+		toCanonicalEvents(payload: Record<string, unknown>): BnplWebhookEvent[] {
+			return tabbyToCanonicalEvents(payload);
 		},
 		toCanonicalEvent(payload: Record<string, unknown>): BnplWebhookEvent | null {
 			return tabbyToCanonicalEvent(payload);
@@ -280,6 +400,14 @@ export function tabby(
 				});
 				return mapEligibilityResponse(response);
 			} catch (e) {
+				if (
+					e instanceof BnplProviderError &&
+					e.status !== undefined &&
+					e.status >= 400 &&
+					e.status < 500 &&
+					e.status !== 429
+				)
+					throw e;
 				ctx.logger.warn(
 					`tabby: eligibility check failed, falling back to local availability: ${e instanceof Error ? e.message : e}`,
 				);

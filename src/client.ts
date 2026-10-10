@@ -73,15 +73,15 @@ export interface BnplAdminRedeliverWebhookEventResult {
 	status: "processed";
 	kind: BnplWebhookEventKind;
 }
-export type BnplAdminCaptureInput = BnplCaptureArgs;
-export type BnplAdminRefundInput = BnplRefundArgs;
+export type BnplAdminCaptureInput = BnplCaptureArgs & { merchantReferenceId: string };
+export type BnplAdminRefundInput = BnplRefundArgs & { merchantRefundId: string };
 export type BnplAdminCancelInput = BnplCancelArgs;
 export interface BnplAdminVoidInput {
 	checkoutId?: string;
 }
 export interface BnplAdminCancelResult {
 	orderId: string;
-	status: "canceled";
+	status: BnplOrderState["status"];
 }
 export type BnplAdminAuthoriseResult =
 	| BnplAuthorizeResult
@@ -96,7 +96,8 @@ export interface BnplAdminReconcileResult {
 }
 export interface BnplAdminVoidResult {
 	orderId: string;
-	voided: true;
+	voided: boolean;
+	capturedAmountMinor?: number;
 }
 export interface BnplAdminCloseResult {
 	orderId: string;

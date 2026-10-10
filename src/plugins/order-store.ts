@@ -1,19 +1,5 @@
 import type { GenericEndpointContext, Where } from "better-auth";
 const MAX_ATTEMPTS = 3;
-type WriteSignal = "confirmed" | "ambiguous";
-function interpretUpdateResult(result: unknown): WriteSignal {
-	if (typeof result === "number" && result > 0) return "confirmed";
-	if (Array.isArray(result)) return result.length > 0 ? "confirmed" : "ambiguous";
-	if (typeof result === "object" && result !== null) return "confirmed";
-	return "ambiguous";
-}
-function nextWriteToken(readVersion: number): number {
-	let token = readVersion;
-	while (token === readVersion) {
-		token = Math.floor(Math.random() * 0x7fffffff);
-	}
-	return token;
-}
 export class OrderStoreConflictError extends Error {
 	readonly model = "bnplOrder";
 	constructor(message: string) {
@@ -29,6 +15,8 @@ export class OrderStoreMissingError extends Error {
 	}
 }
 interface Versioned {
+	id?: string;
+	appliedOperations?: string | null;
 	version?: number | null;
 }
 export type OrderWhere = () => Where[];
@@ -42,6 +30,10 @@ export async function mutateOrder<Row extends Versioned>(
 	where: OrderWhere,
 	compute: (row: Row) => Record<string, unknown> | null,
 ): Promise<MutateResult<Row>> {
+	if (typeof ctx.context.adapter.incrementOne !== "function")
+		throw new Error(
+			"bnpl: persisted orders require Better Auth >= 1.6.23 with guarded atomic updates",
+		);
 	let lastConflictVersion: number | null = null;
 	for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
 		const row = await ctx.context.adapter.findOne<Row>({
@@ -59,28 +51,19 @@ export async function mutateOrder<Row extends Versioned>(
 		}
 		const readVersion = row.version ?? 0;
 		lastConflictVersion = readVersion;
-		const writeToken = nextWriteToken(readVersion);
+		const writeToken = readVersion + 1;
+		if (!Number.isSafeInteger(writeToken)) throw new Error("bnpl: order version exhausted");
 		const guardedUpdate: Record<string, unknown> = { ...update, version: writeToken };
-		const affected: unknown = await ctx.context.adapter.updateMany({
+		const affected = await ctx.context.adapter.incrementOne<Row>({
 			model: "bnplOrder",
-			where: [...where(), { field: "version", value: readVersion }],
-			update: guardedUpdate,
+			where: [
+				...(row.id ? [{ field: "id", value: row.id }] : where()),
+				{ field: "version", value: readVersion },
+			],
+			increment: { version: 1 },
+			set: update,
 		});
-		if (interpretUpdateResult(affected) === "confirmed") {
-			return { previous: row, applied: guardedUpdate };
-		}
-		const verified = await ctx.context.adapter.findOne<Row>({
-			model: "bnplOrder",
-			where: where(),
-		});
-		if (!verified) {
-			throw new OrderStoreMissingError(
-				"bnpl: order row disappeared while verifying a versioned update",
-			);
-		}
-		if ((verified.version ?? 0) === writeToken) {
-			return { previous: row, applied: guardedUpdate };
-		}
+		if (affected) return { previous: row, applied: guardedUpdate };
 		ctx.context.logger.warn(
 			`bnpl: optimistic version conflict on bnplOrder (version=${readVersion}, attempt ${attempt + 1}/${MAX_ATTEMPTS}) — retrying`,
 		);
@@ -88,4 +71,31 @@ export async function mutateOrder<Row extends Versioned>(
 	throw new OrderStoreConflictError(
 		`bnpl: could not apply bnplOrder update after ${MAX_ATTEMPTS} attempts (last version=${lastConflictVersion})`,
 	);
+}
+
+export function readAppliedOperations(value?: string | null): string[] {
+	if (!value) return [];
+	const parsed: unknown = JSON.parse(value);
+	if (!Array.isArray(parsed) || parsed.some((key) => typeof key !== "string")) {
+		throw new Error("bnpl: invalid applied operation ledger");
+	}
+	return parsed;
+}
+
+export async function applyOrderOperation<Row extends Versioned>(
+	ctx: GenericEndpointContext,
+	where: OrderWhere,
+	operationKey: string,
+	compute: (row: Row) => Record<string, unknown> | null,
+): Promise<MutateResult<Row> & { duplicate: boolean }> {
+	let duplicate = false;
+	const result = await mutateOrder<Row>(ctx, where, (row) => {
+		const operations = readAppliedOperations(row.appliedOperations);
+		duplicate = operations.includes(operationKey);
+		if (duplicate) return null;
+		const update = compute(row);
+		if (update === null) return null;
+		return { ...update, appliedOperations: JSON.stringify([...operations, operationKey]) };
+	});
+	return { ...result, duplicate };
 }

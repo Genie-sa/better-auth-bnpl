@@ -16,6 +16,12 @@ import type {
 import { type AbsoluteUrl, absoluteUrlMax1024Schema, isAbsoluteUrl } from "../core/url";
 import type { BnplOptions } from "../plugin-types";
 import {
+	releaseCheckoutClaim,
+	reserveCheckoutOrder,
+	updateCheckoutAttempt,
+} from "./checkout-attempt";
+import { commandInputHash } from "./command-input";
+import {
 	addressSchema,
 	buyerSchema,
 	localeSchema,
@@ -37,7 +43,7 @@ function boundedJsonRecordSchema(field: string): z.ZodType<Record<string, unknow
 }
 const sharedFields = {
 	provider: z.string(),
-	orderReferenceId: z.string().optional(),
+	orderReferenceId: z.string().min(1).optional(),
 	description: z.string().max(256),
 	buyer: buyerSchema.optional(),
 	shippingAddress: addressSchema.optional(),
@@ -444,59 +450,17 @@ function assertNotDeclined(
 		});
 	}
 }
-async function persistCheckoutOrder(
-	ctx: GenericEndpointContext,
-	params: {
-		user: User;
-		provider: BnplProvider;
-		orderReferenceId: string;
-		totalAmount: BnplMoney;
-		paymentType: BnplCheckoutInput["paymentType"];
-		result: Extract<
-			Awaited<ReturnType<BnplProvider["createCheckout"]>>,
-			{
-				checkoutUrl: AbsoluteUrl;
-			}
-		>;
-		metadata: Record<string, unknown> | undefined;
-	},
-): Promise<OrderPersistedContext["record"]> {
-	let amountMinor: number;
+function checkoutAmount(totalAmount: BnplMoney): number {
 	try {
-		amountMinor = parseAmount(params.totalAmount);
-	} catch (e) {
-		ctx.context.logger.error(
-			`bnpl: rejecting checkout — totalAmount invalid: ${e instanceof Error ? e.message : e}`,
-		);
+		const amount = parseAmount(totalAmount);
+		if (amount <= 0) throw new Error("Checkout amount must be positive");
+		return amount;
+	} catch {
 		throw new APIError("BAD_REQUEST", {
 			message: BNPL_ERROR_CODES.INVALID_AMOUNT.message,
 			code: "INVALID_AMOUNT",
 		});
 	}
-	const record = {
-		userId: params.user.id,
-		provider: params.provider.id,
-		orderReferenceId: params.orderReferenceId,
-		providerOrderId: params.result.providerOrderId,
-		providerCheckoutId: params.result.providerCheckoutId,
-		status: params.result.status,
-		amountMinor,
-		currency: params.totalAmount.currency,
-		paymentType: params.paymentType,
-	};
-	await ctx.context.adapter.create({
-		model: "bnplOrder",
-		data: {
-			...record,
-			capturedAmountMinor: 0,
-			refundedAmountMinor: 0,
-			rawData: JSON.stringify(params.result.raw),
-			metadata: params.metadata ? JSON.stringify(params.metadata) : undefined,
-			createdAt: new Date(),
-			updatedAt: new Date(),
-		},
-	});
-	return record;
 }
 export const checkout = (checkoutOptions: CheckoutSubpluginOptions = {}) => {
 	const hasResolver = typeof checkoutOptions.resolveCheckout === "function";
@@ -545,7 +509,46 @@ export const checkout = (checkoutOptions: CheckoutSubpluginOptions = {}) => {
 						redirectBase,
 					),
 				};
-				const result = await createProviderCheckout(provider, canonicalRequest, ctx);
+				const amountMinor = checkoutAmount(money.totalAmount);
+				const hash = commandInputHash(canonicalRequest);
+				const reservation = options.persistOrders
+					? await reserveCheckoutOrder(
+							ctx,
+							{
+								userId: user.id,
+								provider: provider.id,
+								orderReferenceId,
+								status: "new",
+								amountMinor,
+								currency: money.totalAmount.currency,
+								paymentType: canonicalRequest.paymentType,
+								capturedAmountMinor: 0,
+								refundedAmountMinor: 0,
+								metadata: rawInput.metadata ? JSON.stringify(rawInput.metadata) : undefined,
+							},
+							hash,
+						)
+					: undefined;
+				const result = reservation?.attempt.result
+					? { ...reservation.attempt.result, raw: undefined }
+					: await createProviderCheckout(provider, canonicalRequest, ctx);
+				if (reservation?.reserved) {
+					const { raw: _raw, ...savedResult } = result;
+					await updateCheckoutAttempt(
+						ctx,
+						reservation.row,
+						hash,
+						{ result: savedResult },
+						{
+							providerOrderId: result.providerOrderId,
+							...(result.status !== "declined"
+								? { providerCheckoutId: result.providerCheckoutId }
+								: {}),
+							status: result.status,
+							rawData: JSON.stringify(result.raw),
+						},
+					);
+				}
 				assertNotDeclined(result);
 				const hookContext: CheckoutCreatedContext = {
 					input: rawInput,
@@ -561,18 +564,37 @@ export const checkout = (checkoutOptions: CheckoutSubpluginOptions = {}) => {
 					orderReferenceId,
 					endpointContext: ctx,
 				};
-				if (options.persistOrders) {
-					const record = await persistCheckoutOrder(ctx, {
-						user,
-						provider,
-						orderReferenceId,
-						totalAmount: money.totalAmount,
-						paymentType: canonicalRequest.paymentType,
-						result,
-						metadata: rawInput.metadata,
-					});
-					await checkoutOptions.onCheckoutCreated?.(hookContext);
-					await checkoutOptions.onOrderPersisted?.({ ...hookContext, record });
+				if (reservation) {
+					try {
+						if (!reservation.attempt.createdHook) {
+							await checkoutOptions.onCheckoutCreated?.(hookContext);
+							await updateCheckoutAttempt(ctx, reservation.row, hash, { createdHook: true });
+						}
+						if (!reservation.attempt.persistedHook) {
+							await checkoutOptions.onOrderPersisted?.({
+								...hookContext,
+								record: {
+									userId: user.id,
+									provider: provider.id,
+									orderReferenceId,
+									providerOrderId: result.providerOrderId,
+									providerCheckoutId: result.providerCheckoutId,
+									status: result.status,
+									amountMinor,
+									currency: money.totalAmount.currency,
+									paymentType: canonicalRequest.paymentType,
+								},
+							});
+							await updateCheckoutAttempt(ctx, reservation.row, hash, { persistedHook: true });
+						}
+					} catch (error) {
+						try {
+							await releaseCheckoutClaim(ctx, reservation.row, hash);
+						} catch {
+							ctx.context.logger.error("bnpl: failed to release checkout integration claim");
+						}
+						throw error;
+					}
 				} else {
 					await checkoutOptions.onCheckoutCreated?.(hookContext);
 				}

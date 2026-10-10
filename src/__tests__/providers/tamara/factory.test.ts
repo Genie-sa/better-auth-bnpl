@@ -68,7 +68,7 @@ describe("tamara() factory", () => {
 		);
 		expect(body).toEqual({
 			order: { amount: 100, currency: "SAR" },
-			customer: { phone: "+966500000000" },
+			customer: { phone_number: "+966500000000" },
 		});
 		expect(result).toEqual({ available: false });
 	});
@@ -222,10 +222,18 @@ describe("tamara() factory", () => {
 		let body: unknown;
 		const fetch: typeof globalThis.fetch = async (_input, init) => {
 			body = init?.body ? JSON.parse(String(init.body)) : undefined;
-			return new Response(JSON.stringify({ capture_id: "cap-1", order_id: "ord-1" }), {
-				status: 200,
-				headers: { "content-type": "application/json" },
-			});
+			return new Response(
+				JSON.stringify({
+					capture_id: "cap-1",
+					order_id: "ord-1",
+					status: "fully_captured",
+					captured_amount: { amount: "100.00", currency: "SAR" },
+				}),
+				{
+					status: 200,
+					headers: { "content-type": "application/json" },
+				},
+			);
 		};
 		const provider = tamara({
 			...baseConfig,

@@ -5,10 +5,13 @@ import type { BnplProvider } from "../core/provider";
 import type { BnplOrderState, BnplPersistedOrder } from "../core/types";
 import type { BnplOptions } from "../plugin-types";
 import { assertPersistedOrders } from "./persistence";
+import { publicOrder } from "./public-order";
 export interface OrdersSubpluginOptions {
 	restrictToOwner?: boolean;
 }
 interface StoredOrderRecord extends BnplPersistedOrder {
+	appliedOperations?: string | null;
+	webhookTransitions?: string | null;
 	userId: string;
 	provider: string;
 	providerOrderId: string;
@@ -35,10 +38,6 @@ function assertReadableOrder(
 		});
 	}
 }
-function toPublicOrder(record: StoredOrderRecord): Omit<StoredOrderRecord, "rawData"> {
-	const { rawData: _rawData, ...publicOrder } = record;
-	return publicOrder;
-}
 function toPublicRemote(remote: BnplOrderState): Omit<BnplOrderState, "raw"> {
 	const { raw: _raw, ...publicRemote } = remote;
 	return publicRemote;
@@ -55,11 +54,26 @@ export const orders = (ordersOptions: OrdersSubpluginOptions = {}) => {
 					throw new APIError("BAD_REQUEST", { message: "providerOrderId is required" });
 				}
 				assertPersistedOrders(options);
-				const record = await ctx.context.adapter.findOne<StoredOrderRecord>({
+				const userId = ctx.context.session.user.id;
+				const matches = await ctx.context.adapter.findMany<StoredOrderRecord>({
 					model: "bnplOrder",
-					where: [{ field: "providerOrderId", value: providerOrderId }],
+					where: [
+						{ field: "providerOrderId", value: providerOrderId },
+						...(requireOwner ? [{ field: "userId", value: userId }] : []),
+					],
+					limit: 2,
 				});
+				if (matches.length > 1)
+					throw new APIError("CONFLICT", { message: "Order ID matches multiple provider orders" });
+				const record = matches[0];
 				if (!record) {
+					if (requireOwner) {
+						const foreign = await ctx.context.adapter.findOne<StoredOrderRecord>({
+							model: "bnplOrder",
+							where: [{ field: "providerOrderId", value: providerOrderId }],
+						});
+						if (foreign) assertReadableOrder(foreign, userId, true);
+					}
 					throw new APIError("NOT_FOUND", {
 						message: BNPL_ERROR_CODES.ORDER_NOT_FOUND.message,
 						code: "ORDER_NOT_FOUND",
@@ -68,18 +82,18 @@ export const orders = (ordersOptions: OrdersSubpluginOptions = {}) => {
 				assertReadableOrder(record, ctx.context.session.user.id, requireOwner);
 				const provider = providers[record.provider];
 				if (!provider) {
-					return ctx.json(toPublicOrder(record));
+					return ctx.json(publicOrder(record));
 				}
 				try {
 					const remote = await provider.fetchOrder(record.providerOrderId, {
 						logger: ctx.context.logger,
 					});
-					return ctx.json({ ...toPublicOrder(record), remote: toPublicRemote(remote) });
+					return ctx.json({ ...publicOrder(record), remote: toPublicRemote(remote) });
 				} catch (e) {
 					ctx.context.logger.warn(
 						`bnpl: getOrder upstream fetch failed for ${record.provider}/${record.providerOrderId}: ${e instanceof Error ? e.message : e}`,
 					);
-					return ctx.json(toPublicOrder(record));
+					return ctx.json(publicOrder(record));
 				}
 			},
 		),
@@ -106,7 +120,7 @@ export const orders = (ordersOptions: OrdersSubpluginOptions = {}) => {
 					});
 				}
 				assertReadableOrder(record, ctx.context.session.user.id, requireOwner);
-				return ctx.json(toPublicOrder(record));
+				return ctx.json(publicOrder(record));
 			},
 		),
 		bnplListOrders: createAuthEndpoint(
@@ -115,8 +129,8 @@ export const orders = (ordersOptions: OrdersSubpluginOptions = {}) => {
 				method: "GET",
 				query: z
 					.object({
-						limit: z.coerce.number().min(1).max(100).optional(),
-						offset: z.coerce.number().min(0).optional(),
+						limit: z.coerce.number().int().min(1).max(100).optional(),
+						offset: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
 						provider: z.string().optional(),
 					})
 					.optional(),
@@ -138,7 +152,7 @@ export const orders = (ordersOptions: OrdersSubpluginOptions = {}) => {
 					offset: ctx.query?.offset ?? 0,
 					sortBy: { field: "createdAt", direction: "desc" },
 				});
-				return ctx.json({ orders: records.map(toPublicOrder) });
+				return ctx.json({ orders: records.map(publicOrder) });
 			},
 		),
 	});

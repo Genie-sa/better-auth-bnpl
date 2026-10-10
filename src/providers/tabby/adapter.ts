@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
+import { BnplProviderError } from "../../core/errors";
 import { isOneOf, isRecord, readStringField } from "../../core/guards";
-import { isBnplCurrency, parseAmount } from "../../core/money";
+import { formatAmount, isBnplCurrency, parseAmount } from "../../core/money";
 import type { CanonicalStatus } from "../../core/status";
 import type {
 	BnplAddress,
@@ -9,7 +11,7 @@ import type {
 	BnplPaymentType,
 	BnplWebhookEvent,
 } from "../../core/types";
-import { tabbyCheckoutDataSchema } from "./schemas";
+import { tabbyCheckoutDataSchema, tabbyPaymentDetailsSchema } from "./schemas";
 import type {
 	TabbyBuyer,
 	TabbyCaptureRecord,
@@ -74,11 +76,27 @@ export function toTabbyShippingAddress(addr: BnplAddress): TabbyShippingAddress 
 	};
 }
 export function toTabbyItem(item: BnplOrderItem): TabbyOrderItem {
+	if (!Number.isSafeInteger(item.quantity) || item.quantity <= 0) {
+		throw new BnplProviderError("tabby", "item quantity must be a positive safe integer");
+	}
+	const totalMinor = parseAmount(item.totalAmount);
+	if (item.unitPrice && item.unitPrice.currency !== item.totalAmount.currency) {
+		throw new BnplProviderError("tabby", "item unit price currency differs from line total");
+	}
+	if (!item.unitPrice && totalMinor % item.quantity !== 0) {
+		throw new BnplProviderError(
+			"tabby",
+			"item line total cannot be divided exactly; provide unitPrice",
+		);
+	}
+	const unitPrice = item.unitPrice
+		? formatAmount(parseAmount(item.unitPrice), item.unitPrice.currency).amount
+		: formatAmount(totalMinor / item.quantity, item.totalAmount.currency).amount;
 	return {
 		reference_id: item.referenceId,
 		title: item.name,
 		quantity: item.quantity,
-		unit_price: item.unitPrice?.amount ?? item.totalAmount.amount,
+		unit_price: unitPrice,
 		category: item.category ?? item.type,
 		discount_amount: item.discountAmount?.amount,
 		image_url: item.imageUrl,
@@ -106,6 +124,24 @@ export function toTabbyCheckoutRequest(
 	input: BnplCheckoutInput,
 	opts: ToTabbyCheckoutOptions,
 ): TabbyCheckoutRequest {
+	const amounts = [
+		input.totalAmount,
+		input.taxAmount,
+		input.shippingAmount,
+		input.discount?.amount,
+		...input.items.flatMap((item) => [
+			item.totalAmount,
+			item.unitPrice,
+			item.taxAmount,
+			item.discountAmount,
+		]),
+	];
+	for (const money of amounts) {
+		if (!money) continue;
+		if (money.currency !== input.totalAmount.currency)
+			throw new BnplProviderError("tabby", "checkout money currency differs from payment currency");
+		parseAmount(money);
+	}
 	const lang = input.locale?.startsWith("ar") ? "ar" : "en";
 	const providerData =
 		input.providerData === undefined
@@ -135,10 +171,14 @@ export function toTabbyCheckoutRequest(
 				? {
 						buyer_history: providerData.data.buyer_history,
 						order_history: providerData.data.order_history,
-						attachment: {
-							...providerData.data.attachment,
-							body: JSON.stringify(providerData.data.attachment.body),
-						},
+						...(providerData.data.attachment
+							? {
+									attachment: {
+										...providerData.data.attachment,
+										body: JSON.stringify(providerData.data.attachment.body),
+									},
+								}
+							: {}),
 					}
 				: {}),
 		},
@@ -162,8 +202,8 @@ export function tabbyStatusToCanonical(
 ): CanonicalStatus {
 	const normalized = normalizeTabbyPaymentStatus(status);
 	if (normalized === null) {
-		logger?.warn(`tabby: unknown payment status "${status}" — treating as canonical "new"`);
-		return "new";
+		logger?.warn(`tabby: unknown payment status "${status}"`);
+		throw new BnplProviderError("tabby", "unknown payment status");
 	}
 	switch (normalized) {
 		case "CREATED":
@@ -171,7 +211,7 @@ export function tabbyStatusToCanonical(
 		case "AUTHORIZED":
 			return capturedMinor > 0 ? "partially_captured" : "authorised";
 		case "CLOSED":
-			if (refundedMinor >= totalMinor && refundedMinor > 0) return "fully_refunded";
+			if (capturedMinor > 0 && refundedMinor >= capturedMinor) return "fully_refunded";
 			if (refundedMinor > 0) return "partially_refunded";
 			if (capturedMinor >= totalMinor && capturedMinor > 0) return "fully_captured";
 			if (capturedMinor > 0) return "closed";
@@ -210,13 +250,18 @@ function sumAmountRecordsMinor(
 ): number {
 	if (!records || records.length === 0) return 0;
 	let total = 0;
+	const ids = new Set<string>();
 	for (const rec of records) {
+		if (!rec.id || ids.has(rec.id)) {
+			throw new BnplProviderError("tabby", `invalid or duplicate ${recordKind} record ID`);
+		}
+		ids.add(rec.id);
 		try {
 			total += parseAmount({ amount: rec.amount, currency });
+			if (!Number.isSafeInteger(total)) throw new Error("aggregate exceeds safe integer range");
 		} catch (e) {
-			logger.warn(
-				`tabby: ${recordKind} record ${rec.id} amount parse failed: ${e instanceof Error ? e.message : e}`,
-			);
+			logger.warn(`tabby: invalid ${recordKind} amount`);
+			throw new BnplProviderError("tabby", `invalid ${recordKind} amount`, { cause: e });
 		}
 	}
 	return total;
@@ -387,6 +432,9 @@ export function fromTabbyPaymentDetails(
 	const totalMinor = parseAmount({ amount: payment.amount, currency: payment.currency });
 	const capturedMinor = sumCapturesMinor(payment.captures, payment.currency, logger);
 	const refundedMinor = sumRefundsMinor(payment.refunds, payment.currency, logger);
+	if (capturedMinor > totalMinor || refundedMinor > capturedMinor) {
+		throw new BnplProviderError("tabby", "payment financial totals are inconsistent");
+	}
 	return {
 		totalMinor,
 		capturedMinor,
@@ -399,4 +447,79 @@ export function fromTabbyPaymentDetails(
 			logger,
 		),
 	};
+}
+
+export function tabbyToCanonicalEvents(payload: Record<string, unknown>): BnplWebhookEvent[] {
+	const parsed = tabbyPaymentDetailsSchema.safeParse(payload);
+	if (!parsed.success)
+		throw new BnplProviderError("tabby", "invalid payment snapshot", { cause: parsed.error });
+	const payment = parsed.data;
+	const derived = fromTabbyPaymentDetails(payment, { warn: () => {} });
+	const currency = payment.currency;
+	if (!isBnplCurrency(currency)) throw new BnplProviderError("tabby", "invalid payment currency");
+	const events: BnplWebhookEvent[] = [];
+	for (const record of payment.captures ?? []) {
+		events.push({
+			kind: "captured",
+			provider: PROVIDER_ID,
+			orderId: payment.id,
+			captureId: record.id,
+			amountMinor: parseAmount({ amount: record.amount, currency }),
+			currency,
+			raw: payload,
+		});
+	}
+	for (const record of payment.refunds ?? []) {
+		events.push({
+			kind: "refunded",
+			provider: PROVIDER_ID,
+			orderId: payment.id,
+			refundId: record.id,
+			amountMinor: parseAmount({ amount: record.amount, currency }),
+			currency,
+			raw: payload,
+		});
+	}
+	const orderReferenceId = isRecord(payload.order)
+		? readStringField(payload.order, "reference_id")
+		: undefined;
+	if (
+		payment.status.toUpperCase() === "AUTHORIZED" &&
+		!payment.captures?.length &&
+		!payment.refunds?.length
+	) {
+		events.push({
+			kind: "authorized",
+			provider: PROVIDER_ID,
+			orderId: payment.id,
+			orderReferenceId,
+			raw: payload,
+		});
+	}
+	if (derived.status === "declined" || derived.status === "expired") {
+		events.push({ kind: derived.status, provider: PROVIDER_ID, orderId: payment.id, raw: payload });
+	}
+	events.push({
+		kind: "updated",
+		provider: PROVIDER_ID,
+		orderId: payment.id,
+		status: derived.status,
+		orderReferenceId,
+		totalAmount: formatAmount(derived.totalMinor, currency),
+		raw: payload,
+	});
+	return events;
+}
+export function tabbySnapshotDedupKey(payload: Record<string, unknown>): string {
+	const events = tabbyToCanonicalEvents(payload);
+	const identity = events.map(({ raw: _raw, ...event }) => event);
+	const money = identity
+		.filter((event) => event.kind === "captured" || event.kind === "refunded")
+		.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+	const lifecycle = identity.filter(
+		(event) => event.kind !== "captured" && event.kind !== "refunded",
+	);
+	return `${PROVIDER_ID}:snapshot:${createHash("sha256")
+		.update(JSON.stringify([...money, ...lifecycle]))
+		.digest("hex")}`;
 }

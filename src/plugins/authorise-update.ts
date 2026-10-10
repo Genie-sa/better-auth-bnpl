@@ -1,10 +1,13 @@
+import { type CanonicalStatus, canTransition } from "../core/status";
 import type { BnplAuthorizeResult } from "../core/types";
 interface AuthoriseOrderSnapshot {
 	amountMinor?: number;
+	canceledAmountMinor?: number;
+	status?: CanonicalStatus | string;
 	capturedAmountMinor: number;
 }
 interface AuthoriseOrderUpdate {
-	status: BnplAuthorizeResult["status"];
+	status: CanonicalStatus | string;
 	authorisedAt: Date;
 	rawData: string;
 	updatedAt: Date;
@@ -21,10 +24,17 @@ export function buildAuthoriseOrderUpdate(
 ): AuthoriseOrderUpdateResult {
 	const capturedAmountMinor =
 		result.capturedAmountMinor ??
-		(result.autoCaptured || result.status === "fully_captured" ? snapshot.amountMinor : undefined);
+		(result.autoCaptured || result.status === "fully_captured"
+			? snapshot.amountMinor === undefined
+				? undefined
+				: snapshot.amountMinor - (snapshot.canceledAmountMinor ?? 0)
+			: undefined);
 	const now = new Date();
 	const update: AuthoriseOrderUpdate = {
-		status: result.status,
+		status:
+			snapshot.status && !canTransition(snapshot.status, result.status)
+				? snapshot.status
+				: result.status,
 		authorisedAt: now,
 		rawData: JSON.stringify(result.raw),
 		updatedAt: now,

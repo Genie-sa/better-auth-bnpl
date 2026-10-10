@@ -14,7 +14,7 @@ Authoritative reference for anything not covered here: after install, read `node
 Read the user's repo before asking anything:
 
 - Better Auth server config file (`auth.ts` or similar) and client file (`auth-client.ts`).
-- `better-auth` version — the plugin requires `^1.5.0`. Below that, plan the upgrade as part of this work.
+- `better-auth` version — the plugin requires `^1.6.23`. Below that, plan the upgrade as part of this work.
 - Database adapter (persistence needs one) and framework (route handlers for webhooks differ).
 - Existing env handling (`.env.example`, config module) so secrets follow the repo's convention.
 - Whether `better-auth-bnpl` is already installed — if so, this is an upgrade/repair, not a fresh install; diff their config against the current README's breaking-changes section.
@@ -125,7 +125,7 @@ The plugin mounts one endpoint: `POST {basePath}/bnpl/webhooks/:provider` (typic
 - **Tabby**: register the webhook with your chosen header name/value — the same pair passed to `webhookHeader`.
 - **Tamara**: register the URL; verification uses the `notificationToken` JWT.
 
-Handlers run inline before the ACK; providers time out and retry non-200s, so keep handlers fast and queue slow work. Duplicates and out-of-order deliveries are already handled (dedup keys, `orderApplied` barrier, forward-only status machine) — do not add your own dedup on top.
+Handlers run inline before the ACK; providers time out and retry non-200s, so keep handlers fast and queue slow work. The plugin handles duplicate accounting with dedup keys, an atomic native-operation ledger, and guarded lifecycle transitions. External callback effects remain at least once. Deduplicate those effects by deliveryId.
 
 For local development, use a tunnel (e.g. `ngrok`) to receive sandbox webhooks and test the full provider lifecycle.
 

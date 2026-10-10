@@ -7,9 +7,12 @@ import type {
 	tamaraCaptureBodySchema,
 	tamaraCheckoutRequestSchema,
 	tamaraConsumerRequestSchema,
+	tamaraOrderDetailsResponseSchema,
 	tamaraOrderItemRequestSchema,
 	tamaraPreCheckoutEligibilityRequestSchema,
+	tamaraProviderDataSchema,
 	tamaraRegisterWebhookRequestSchema,
+	tamaraRiskAssessmentSchema,
 	tamaraSimplifiedRefundBodySchema,
 	tamaraUpdateReferenceIdRequestSchema,
 	tamaraUpdateWebhookRequestSchema,
@@ -24,6 +27,8 @@ export type TamaraConsumer = z.input<typeof tamaraConsumerRequestSchema>;
 export type TamaraOrderItem = z.input<typeof tamaraOrderItemRequestSchema>;
 export type TamaraMerchantUrl = z.input<typeof tamaraCheckoutRequestSchema>["merchant_url"];
 export type TamaraCheckoutRequest = z.input<typeof tamaraCheckoutRequestSchema>;
+export type TamaraRiskAssessment = z.input<typeof tamaraRiskAssessmentSchema>;
+export type TamaraProviderData = z.input<typeof tamaraProviderDataSchema>;
 export interface TamaraCheckoutResponse {
 	order_id: string;
 	checkout_id: string;
@@ -31,32 +36,31 @@ export interface TamaraCheckoutResponse {
 	status: string;
 	[k: string]: unknown;
 }
-export interface TamaraOrderDetailsResponse {
-	order_id: string;
-	order_reference_id: string;
-	status: string;
-	total_amount: TamaraMoney;
-	captured_amount?: TamaraMoney;
-	refunded_amount?: TamaraMoney;
-	[k: string]: unknown;
-}
+export type TamaraOrderDetailsResponse = z.output<typeof tamaraOrderDetailsResponseSchema>;
 export interface TamaraCaptureResponse {
 	capture_id: string;
 	order_id: string;
+	status: "fully_captured" | "partially_captured";
+	captured_amount: TamaraMoney;
 	[k: string]: unknown;
 }
 export interface TamaraSimplifiedRefundResponse {
 	refund_id: string;
 	order_id: string;
+	status: "fully_refunded" | "partially_refunded";
+	refunded_amount: TamaraMoney;
 	[k: string]: unknown;
 }
 export interface TamaraCancelResponse {
 	order_id: string;
-	status: string;
+	cancel_id: string;
+	status: "updated" | "canceled";
+	canceled_amount: TamaraMoney;
 	[k: string]: unknown;
 }
 export interface TamaraVoidResponse {
 	order_was_voided: boolean;
+	captured_amount?: TamaraMoney;
 	[k: string]: unknown;
 }
 export interface TamaraAuthoriseResponse {

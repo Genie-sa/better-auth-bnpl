@@ -1,7 +1,7 @@
 import type { z } from "zod";
 import type { ProviderFetch } from "../../core/provider";
 import { type ProviderHttpMethod, type SleepFn, requestProviderJson } from "../http";
-import { createOpenApiPathBuilder } from "../openapi-path";
+import { createOpenApiPathBuilder, encodeProviderResourceId } from "../openapi-path";
 import { TAMARA_BASE_URLS } from "./constants";
 import type { paths as TamaraOpenApiPaths } from "./openapi";
 import {
@@ -16,10 +16,12 @@ import {
 	tamaraOrderDetailsResponseSchema,
 	tamaraPreCheckoutEligibilityRequestSchema,
 	tamaraPreCheckoutEligibilityResponseSchema,
+	tamaraRegisterWebhookRequestSchema,
 	tamaraSimplifiedRefundBodySchema,
 	tamaraSimplifiedRefundResponseSchema,
 	tamaraUpdateReferenceIdRequestSchema,
 	tamaraUpdateReferenceIdResponseSchema,
+	tamaraUpdateWebhookRequestSchema,
 	tamaraVoidQuerySchema,
 	tamaraVoidResponseSchema,
 	tamaraWebhookDetailsResponseSchema,
@@ -132,7 +134,7 @@ export class TamaraClient {
 	async getOrderByReferenceId(referenceId: string): Promise<TamaraOrderDetailsResponse> {
 		return this.request({
 			method: "GET",
-			path: `/merchants/orders/reference-id/${encodeURIComponent(referenceId)}`,
+			path: `/merchants/orders/reference-id/${encodeProviderResourceId(referenceId)}`,
 			schema: tamaraOrderDetailsResponseSchema,
 			label: "getOrderByReferenceId",
 		});
@@ -212,6 +214,7 @@ export class TamaraClient {
 			method: "POST",
 			path: "/webhooks",
 			body,
+			bodySchema: tamaraRegisterWebhookRequestSchema,
 			schema: tamaraWebhookRegistrationResponseSchema,
 			label: "registerWebhook",
 		});
@@ -219,7 +222,7 @@ export class TamaraClient {
 	async retrieveWebhook(webhookId: string): Promise<TamaraWebhookDetails> {
 		return this.request({
 			method: "GET",
-			path: `/webhooks/${encodeURIComponent(webhookId)}`,
+			path: `/webhooks/${encodeProviderResourceId(webhookId)}`,
 			schema: tamaraWebhookDetailsResponseSchema,
 			label: "retrieveWebhook",
 		});
@@ -230,8 +233,9 @@ export class TamaraClient {
 	): Promise<TamaraWebhookDetails> {
 		return this.request({
 			method: "PUT",
-			path: `/webhooks/${encodeURIComponent(webhookId)}`,
+			path: `/webhooks/${encodeProviderResourceId(webhookId)}`,
 			body,
+			bodySchema: tamaraUpdateWebhookRequestSchema,
 			schema: tamaraWebhookDetailsResponseSchema,
 			label: "updateWebhook",
 		});
@@ -239,7 +243,7 @@ export class TamaraClient {
 	async deleteWebhook(webhookId: string): Promise<void> {
 		await this.request({
 			method: "DELETE",
-			path: `/webhooks/${encodeURIComponent(webhookId)}`,
+			path: `/webhooks/${encodeProviderResourceId(webhookId)}`,
 			schema: tamaraDeleteWebhookResponseSchema,
 			label: "deleteWebhook",
 		});

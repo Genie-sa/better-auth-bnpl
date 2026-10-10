@@ -574,10 +574,13 @@ describe("bnpl() Better Auth integration", () => {
 		const captureRes = await instance.client.$fetch("/bnpl/admin/orders/ord-integration/capture", {
 			method: "POST",
 			headers,
-			body: { totalAmount: { amount: "50.00", currency: "SAR" } },
+			body: {
+				totalAmount: { amount: "50.00", currency: "SAR" },
+				merchantReferenceId: "admin-capture-1",
+			},
 		});
 		expect(captureRes.error).toBeNull();
-		expect(captureReferenceId).toBe("bnpl:tabby:ord-integration:capture:5000");
+		expect(captureReferenceId).toBe("admin-capture-1");
 		const duplicateWebhook = await instance.client.$fetch("/bnpl/webhooks/tabby", {
 			method: "POST",
 			body: { id: "ord-integration", status: "CAPTURED" },
@@ -592,33 +595,58 @@ describe("bnpl() Better Auth integration", () => {
 		expect(row.capturedAmountMinor).toBe(5000);
 		expect(row.status).toBe("partially_captured");
 	});
-	it("skips captureOnAuthorise when orders are not persisted", async () => {
+	it("authorises a persisted approved Tamara order without enabling capture", async () => {
 		const authorize = makeTamaraAuthorise();
 		const capture = makeTamaraCapture();
 		const provider = makeTamaraApprovedProvider({
+			async createCheckout() {
+				return {
+					providerOrderId: "ord-authorise",
+					providerCheckoutId: "chk-authorise",
+					checkoutUrl: "https://checkout.example.test/chk-authorise",
+					status: "new",
+					raw: {},
+				};
+			},
 			authorize,
 			capture,
 		});
 		const instance = await makeBnplTestInstance([
 			bnpl({
 				providers: { tamara: provider },
-				persistOrders: false,
+				persistOrders: true,
 				autoAuthorise: true,
-				captureOnAuthorise: true,
-				use: [webhooks()],
+				captureOnAuthorise: false,
+				mapUserToBuyer: ({ user }) => ({
+					firstName: "Test",
+					lastName: "User",
+					email: user.email,
+					phone: "+966500000000",
+				}),
+				use: [checkout(), orders(), webhooks()],
 			}),
 		]);
+		const { headers } = await instance.signInWithTestUser();
+		const checkoutRes = await instance.client.$fetch("/bnpl/checkout", {
+			method: "POST",
+			headers,
+			body: { ...checkoutBody, provider: "tamara", orderReferenceId: "ref-authorise" },
+		});
+		expect(checkoutRes.error).toBeNull();
 		const res = await instance.client.$fetch("/bnpl/webhooks/tamara", {
 			method: "POST",
 			body: tamaraApprovedWebhookBody,
 		});
 		expect(res.error).toBeNull();
-		expect(res.data).toMatchObject({
-			received: true,
-			kind: "approved",
-		});
+		expect(res.data).toMatchObject({ received: true, kind: "approved" });
 		expect(authorize).toHaveBeenCalledOnce();
+		expect(authorize).toHaveBeenCalledWith("ord-authorise", expect.anything());
 		expect(capture).not.toHaveBeenCalled();
+		expect(await listFirstOrder(instance, headers)).toMatchObject({
+			providerOrderId: "ord-authorise",
+			status: "authorised",
+			capturedAmountMinor: 0,
+		});
 	});
 	it("uses captureOnAuthoriseShippingInfo for docs-valid auto-capture", async () => {
 		const captureArgs: BnplCaptureArgs[] = [];

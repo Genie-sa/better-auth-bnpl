@@ -26,6 +26,9 @@ export const BNPL_ERROR_CODES = defineBnplErrorCodes({
 	OPERATION_NOT_SUPPORTED: "This operation is not supported by the order's provider",
 	CHECKOUT_CREATION_FAILED: "BNPL checkout creation failed",
 	CHECKOUT_REJECTED: "Provider rejected this checkout",
+	CHECKOUT_CONFLICT: "Checkout reference conflicts with an existing or uncertain checkout",
+	MONEY_COMMAND_CONFLICT: "Order operation conflicts with an existing or uncertain command",
+	INVALID_CANCEL_REFERENCE: "Amount-bearing cancellation requires merchantReferenceId",
 	INVALID_URL: "URL must be an absolute HTTP(S) URL",
 	RESOLVE_CHECKOUT_INCOMPLETE:
 		"resolveCheckout must return totalAmount, items, and the other canonical money fields",
@@ -102,7 +105,9 @@ export class BnplProviderError extends Error {
 		if (!body || typeof body !== "object" || !("message" in body)) return false;
 		const message = body.message;
 		if (typeof message !== "string") return false;
-		return /already|not\s+allowed|invalid\s+status/i.test(message);
+		return /\balready\s+(?:authori[sz]ed|captured|refunded|canceled|cancelled|closed)\b/i.test(
+			message,
+		);
 	}
 }
 export const isBnplProviderError = (e: unknown): e is BnplProviderError =>
