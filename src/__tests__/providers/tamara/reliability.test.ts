@@ -1,5 +1,6 @@
 import { createHmac } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { BnplProviderError, isDefinitiveRejection } from "../../../core/errors";
 import type { BnplCheckoutInput } from "../../../core/types";
 import { TamaraClient, tamara } from "../../../providers/tamara";
 import {
@@ -411,6 +412,72 @@ describe("Tamara financial contracts", () => {
 				ctx,
 			),
 		).resolves.toMatchObject({ status: "updated", cancelId: "cancel-1", amountMinor: 3000 });
+	});
+	const zeroCancel = (responseStatus: string, transactions: unknown) =>
+		tamara({
+			...config,
+			fetch: vi.fn(async (_url, options) =>
+				Response.json(
+					options?.method === "GET"
+						? {
+								...order,
+								status: "new",
+								captured_amount: { ...money, amount: "0.00" },
+								...(transactions === undefined ? {} : { transactions }),
+							}
+						: {
+								order_id: "order-1",
+								cancel_id: "unapplied-cancel",
+								status: responseStatus,
+								canceled_amount: { amount: 0, currency: "SAR" },
+							},
+				),
+			),
+		})
+			.cancel("order-1", { totalAmount: { ...money, amount: "25.00" } }, ctx)
+			.catch((e: unknown) => e);
+	it("reports the sandbox-observed zero-amount cancellation as a definitive rejection", async () => {
+		const error = await zeroCancel("new", { captures: [], refunds: [], cancels: [] });
+		expect(error).toBeInstanceOf(BnplProviderError);
+		expect(isDefinitiveRejection(error)).toBe(true);
+	});
+	it("keeps a zero-amount cancellation uncertain when native history is missing", async () => {
+		const error = await zeroCancel("new", undefined);
+		expect(error).toBeInstanceOf(BnplProviderError);
+		expect(isDefinitiveRejection(error)).toBe(false);
+	});
+	it("keeps a zero-amount cancellation uncertain when the snapshot omits cancellation history", async () => {
+		const error = await zeroCancel("new", { captures: [], refunds: [] });
+		expect(error).toBeInstanceOf(BnplProviderError);
+		expect(isDefinitiveRejection(error)).toBe(false);
+	});
+	it("keeps a zero-amount cancellation uncertain when the response claims cancellation", async () => {
+		const error = await zeroCancel("canceled", { captures: [], refunds: [], cancels: [] });
+		expect(error).toBeInstanceOf(BnplProviderError);
+		expect(isDefinitiveRejection(error)).toBe(false);
+	});
+	it.each([
+		[{ errors: [{ error_code: "transition_not_allowed" }], data: { capture_ids: [] } }, true],
+		[{ message: "conflict" }, false],
+	])("classifies a capture 409 with body %j as rejected=%s", async (body, rejected) => {
+		const provider = tamara({
+			...config,
+			fetch: async () => Response.json(body, { status: 409 }),
+		});
+		const error = await provider.capture("order-1", captureArgs, ctx).catch((e: unknown) => e);
+		expect(isDefinitiveRejection(error)).toBe(rejected);
+	});
+	it("keeps a positive cancellation with an unexpected status uncertain", async () => {
+		const error = await providerReturning({
+			order_id: "order-1",
+			cancel_id: "cancel-1",
+			status: "new",
+			canceled_amount: { ...money, amount: "25.00" },
+		})
+			.cancel("order-1", { totalAmount: { ...money, amount: "25.00" } }, ctx)
+			.catch((e: unknown) => e);
+		expect(error).toBeInstanceOf(BnplProviderError);
+		expect(isDefinitiveRejection(error)).toBe(false);
 	});
 	it.each([
 		{ requested: "75.00", cumulative: "100.00", status: "fully_refunded" },
@@ -882,4 +949,50 @@ describe("Tamara cumulative cancellation responses", () => {
 		).rejects.toMatchObject({ name: "BnplProviderError" });
 		expect(methods).toEqual(["POST", "GET"]);
 	});
+});
+
+describe("Tamara post-dispatch corroboration failures", () => {
+	const cumulativeResponse = {
+		refund: {
+			order_id: "order-1",
+			refund_id: "current",
+			status: "fully_refunded",
+			refunded_amount: money,
+		},
+		cancel: {
+			order_id: "order-1",
+			cancel_id: "current",
+			status: "canceled",
+			canceled_amount: money,
+		},
+	};
+	it.each([
+		{ operation: "refund" as const, status: 400 },
+		{ operation: "refund" as const, status: 401 },
+		{ operation: "refund" as const, status: 404 },
+		{ operation: "cancel" as const, status: 400 },
+		{ operation: "cancel" as const, status: 404 },
+	])(
+		"keeps an accepted $operation uncertain when its corroborating GET returns $status",
+		async ({ operation, status }) => {
+			const methods: string[] = [];
+			const provider = tamara({
+				...config,
+				fetch: async (_url, init) => {
+					methods.push(init?.method ?? "GET");
+					return init?.method === "GET"
+						? Response.json({ message: "unavailable" }, { status })
+						: Response.json(cumulativeResponse[operation]);
+				},
+			});
+			const partial = { totalAmount: { ...money, amount: "25.00" } };
+			const error = await (operation === "refund"
+				? provider.refund("order-1", partial, ctx)
+				: provider.cancel("order-1", partial, ctx)
+			).catch((cause: unknown) => cause);
+			expect(error).toMatchObject({ name: "BnplProviderError" });
+			expect(isDefinitiveRejection(error)).toBe(false);
+			expect(methods).toEqual(["POST", "GET"]);
+		},
+	);
 });

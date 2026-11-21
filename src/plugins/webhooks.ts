@@ -1,7 +1,7 @@
 import type { GenericEndpointContext, Where } from "better-auth";
 import { APIError, createAuthEndpoint, sessionMiddleware } from "better-auth/api";
 import { z } from "zod";
-import { BNPL_ERROR_CODES, BnplProviderError } from "../core/errors";
+import { BNPL_ERROR_CODES } from "../core/errors";
 import { isRecord } from "../core/guards";
 import {
 	BNPL_CURRENCIES,
@@ -17,6 +17,7 @@ import {
 	canTransition,
 	deriveCapturedStatus,
 	deriveRefundedStatus,
+	statusFromBalances,
 } from "../core/status";
 import type { BnplOrderState, BnplWebhookEvent } from "../core/types";
 import type { BnplOptions } from "../plugin-types";
@@ -27,8 +28,9 @@ import {
 	completeMoneyCommand,
 	isAuthorisedState,
 	recoverLocalAuthoriseCommand,
-	releaseRejectedMoneyCommand,
+	reportsAuthorisedState,
 	reserveMoneyCommand,
+	sendReservedCommand,
 } from "./money-command";
 import { operationReference } from "./operation-reference";
 import { OrderStoreMissingError, mutateOrder, readAppliedOperations } from "./order-store";
@@ -118,6 +120,7 @@ export interface WebhooksSubpluginOptions extends ProviderSpecificHandlers {
 }
 interface StoredOrder {
 	canceledAmountMinor?: number;
+	canceledAt?: Date | null;
 	provider: string;
 	status: string;
 	amountMinor: number;
@@ -470,20 +473,19 @@ function readCancellationHistory(
 		!remote.operations?.some((operation) => operation.kind === "canceled")
 	)
 		throw new Error("bnpl: cancellation notification requires native cancellation history");
-	const partial =
-		remote.status === "updated" &&
-		history.canceled < existing.amountMinor &&
-		history.captured === 0 &&
-		history.refunded === 0;
+	const uncommitted = existing.amountMinor - history.canceled - history.captured;
 	if (
-		(remote.status === "updated" && !partial) ||
-		(remote.status === "canceled" &&
-			(history.canceled !== existing.amountMinor ||
-				history.captured !== 0 ||
-				history.refunded !== 0))
+		(remote.status === "updated" && uncommitted <= 0) ||
+		(remote.status === "canceled" && uncommitted !== 0)
 	)
 		throw new Error("bnpl: cancellation notification status contradicts native balances");
-	return { history, partial };
+	const status = statusFromBalances(remote.status, {
+		amountMinor: existing.amountMinor,
+		captured: history.captured,
+		refunded: history.refunded,
+		canceled: history.canceled,
+	});
+	return { history, status };
 }
 async function normalizeCancellationEvent(
 	provider: BnplProvider,
@@ -492,14 +494,14 @@ async function normalizeCancellationEvent(
 ) {
 	if (provider.id !== "tamara" || event.kind !== "canceled") return { event, remote: undefined };
 	const remote = await provider.fetchOrder(event.orderId, { logger: ctx.context.logger });
+	const status = statusFromBalances(remote.status, {
+		amountMinor: parseAmount(remote.totalAmount),
+		captured: remote.capturedAmountMinor,
+		refunded: remote.refundedAmountMinor,
+		canceled: remote.canceledAmountMinor ?? 0,
+	});
 	const normalized: BnplWebhookEvent =
-		remote.status === "canceled"
-			? event
-			: {
-					...event,
-					kind: "updated",
-					status: remote.status === "updated" ? "authorised" : remote.status,
-				};
+		status === "canceled" ? event : { ...event, kind: "updated", status };
 	return { event: normalized, remote };
 }
 const cancellationSnapshotSchema = z.object({
@@ -554,7 +556,9 @@ async function processDelivery(
 	const checkpoint: {
 		completed: string[];
 		contexts: Record<string, z.infer<typeof cancellationContextSchema>>;
-	} = deliveryCheckpointSchema.parse(row.deliveryState ? JSON.parse(row.deliveryState) : []);
+	} = deliveryCheckpointSchema.parse(
+		claimed.deliveryState ? JSON.parse(claimed.deliveryState) : [],
+	);
 	if (deps.redelivery && row.status === "processed") checkpoint.completed = [];
 	const completed = checkpoint.completed;
 	try {
@@ -595,7 +599,7 @@ async function processDelivery(
 				currentEvent,
 				verification.rawBody,
 				`${row.id}:${index}`,
-				row.orderApplied === true,
+				claimed.orderApplied === true,
 				remote,
 			);
 			const autoAuthoriseResult = await resolveAutoAuthorise(provider, ctx, currentEvent, options, {
@@ -834,10 +838,11 @@ async function persistOrderUpdate(
 				ctx.context.logger,
 				legacyApplied,
 			);
-			let partialCancellationRepair = false;
+			let target = candidate;
+			let cancellationRepair = false;
 			let importedKeys = operations;
 			if (remoteCancellation) {
-				const { history, partial } = readCancellationHistory(
+				const { history, status } = readCancellationHistory(
 					provider,
 					event,
 					existing,
@@ -849,14 +854,18 @@ async function persistOrderUpdate(
 					canceledAmountMinor: history.canceled,
 				});
 				importedKeys = history.keys;
-				partialCancellationRepair = partial && existing.status === "canceled";
-				if (partialCancellationRepair) update.canceledAt = null;
+				target = status;
+				if (status !== "canceled") {
+					if (existing.status === "canceled") update.canceledAt = null;
+					else if (update.canceledAt !== undefined) update.canceledAt = existing.canceledAt ?? null;
+				}
+				cancellationRepair = existing.status === "canceled" && status !== "canceled";
 			}
-			const finalStatus = partialCancellationRepair
-				? "authorised"
-				: candidate !== existing.status && canTransition(existing.status, candidate)
-					? candidate
-					: applyRegressionGuard(existing.status, candidate, event, ctx.context.logger);
+			const finalStatus = cancellationRepair
+				? target
+				: target !== existing.status && canTransition(existing.status, target)
+					? target
+					: applyRegressionGuard(existing.status, target, event, ctx.context.logger);
 			update.status = finalStatus;
 			statusChange =
 				finalStatus !== existing.status
@@ -922,7 +931,9 @@ function computeEventTarget(
 			if (cumulative === null) return existing.status;
 			return deriveRefundedStatus({
 				totalAmountMinor:
-					existing.capturedAmountMinor > 0 ? existing.capturedAmountMinor : existing.amountMinor,
+					existing.capturedAmountMinor > 0
+						? existing.capturedAmountMinor
+						: existing.amountMinor - (existing.canceledAmountMinor ?? 0),
 				cumulativeMinor: cumulative,
 			});
 		}
@@ -930,7 +941,13 @@ function computeEventTarget(
 			if (event.totalAmount) {
 				if (event.totalAmount.currency !== existing.currency)
 					throw new Error("bnpl: updated order currency differs");
-				Object.assign(update, { amountMinor: parseAmount(event.totalAmount) });
+				const amountMinor = parseAmount(event.totalAmount);
+				if (
+					amountMinor <= 0 ||
+					amountMinor < existing.capturedAmountMinor + (existing.canceledAmountMinor ?? 0)
+				)
+					throw new Error("bnpl: updated order total is below its committed balance");
+				Object.assign(update, { amountMinor });
 			}
 			return event.status ?? existing.status;
 		default:
@@ -991,6 +1008,9 @@ function applyRegressionGuard(
 	);
 	return currentStatus;
 }
+function positiveOrNull(amountMinor: number | null): number | null {
+	return amountMinor !== null && amountMinor > 0 ? amountMinor : null;
+}
 function pickCaptureDelta(
 	event: BnplWebhookEvent,
 	existing: StoredOrder,
@@ -1011,7 +1031,7 @@ function pickCaptureDelta(
 		return event.amountMinor;
 	}
 	const data = isRecord(event.raw) ? event.raw.data : undefined;
-	return extractMinorAmount(data, "captured_amount", existing.currency, logger);
+	return positiveOrNull(extractMinorAmount(data, "captured_amount", existing.currency, logger));
 }
 function pickRefundDelta(
 	event: BnplWebhookEvent,
@@ -1033,7 +1053,7 @@ function pickRefundDelta(
 		return event.amountMinor;
 	}
 	const data = isRecord(event.raw) ? event.raw.data : undefined;
-	return extractMinorAmount(data, "refunded_amount", existing.currency, logger);
+	return positiveOrNull(extractMinorAmount(data, "refunded_amount", existing.currency, logger));
 }
 async function runAutoAuthorise(
 	provider: BnplProvider,
@@ -1043,7 +1063,8 @@ async function runAutoAuthorise(
 	alreadyProcessed: boolean,
 ): Promise<AutoAuthoriseOutcome> {
 	if (event.kind !== "approved") return { status: "not-applicable" };
-	if (!provider.capabilities.separateAuthorise || !provider.authorize) {
+	const authorize = provider.authorize?.bind(provider);
+	if (!provider.capabilities.separateAuthorise || !authorize) {
 		return { status: "not-applicable" };
 	}
 	if (options.autoAuthorise === false) return { status: "disabled" };
@@ -1094,7 +1115,13 @@ async function runAutoAuthorise(
 		recoveryRequested = reservation.kind === "pending";
 		if (recoveryRequested)
 			throw new Error("bnpl: authorisation outcome is uncertain; verifying remote state");
-		const result = await provider.authorize(orderId, { logger: ctx.context.logger });
+		const result = await sendReservedCommand(
+			ctx,
+			() => webhookOrderWhere(provider.id, orderId),
+			reservedCommand,
+			() => authorize(orderId, { logger: ctx.context.logger }),
+			reportsAuthorisedState,
+		);
 		if (result.providerOrderId !== orderId)
 			throw new Error("bnpl: authorisation order identity mismatch");
 		let capturedAmountMinor: number | undefined;
@@ -1105,6 +1132,7 @@ async function runAutoAuthorise(
 				() => webhookOrderWhere(provider.id, orderId),
 				(row) => {
 					const updateResult = buildAuthoriseOrderUpdate(result, {
+						currency: row.currency,
 						amountMinor: row.amountMinor,
 						canceledAmountMinor: row.canceledAmountMinor,
 						status: row.status,
@@ -1154,7 +1182,7 @@ async function runAutoAuthorise(
 		}
 		return { status: "authorised", raw: result.raw };
 	} catch (e) {
-		if (recoveryRequested || (e instanceof BnplProviderError && e.isAlreadyInTargetState)) {
+		if (recoveryRequested || reportsAuthorisedState(e)) {
 			const recoveryCommand = command;
 			if (!recoveryCommand)
 				return { status: "failed", error: e instanceof Error ? e : new Error(String(e)) };
@@ -1172,10 +1200,12 @@ async function runAutoAuthorise(
 							refunded,
 							canceled,
 						} = readRemoteHistory(provider, current, remote);
-						const candidate =
-							refunded > 0
-								? deriveRefundedStatus({ totalAmountMinor: captured, cumulativeMinor: refunded })
-								: remote.status;
+						const candidate = statusFromBalances(remote.status, {
+							amountMinor: current.amountMinor,
+							captured,
+							refunded,
+							canceled,
+						});
 						return {
 							...buildAuthoriseOrderUpdate(
 								{
@@ -1283,34 +1313,17 @@ async function runAutoCapture(
 		if (reservation.kind === "completed")
 			captureResult = reservation.result as unknown as typeof captureResult;
 		else {
-			try {
-				captureResult = await provider.capture(
-					orderId,
-					{ totalAmount: total, shippingInfo, merchantReferenceId: reference },
-					{ logger: ctx.context.logger },
-				);
-			} catch (error) {
-				if (
-					error instanceof BnplProviderError &&
-					error.status !== undefined &&
-					error.status >= 400 &&
-					error.status < 500 &&
-					error.status !== 408 &&
-					error.status !== 429 &&
-					!error.isAlreadyInTargetState
-				) {
-					try {
-						await releaseRejectedMoneyCommand(
-							ctx,
-							() => webhookOrderWhere(provider.id, orderId),
-							reservation.command,
-						);
-					} catch {
-						ctx.context.logger.error("bnpl: could not release rejected auto-capture command");
-					}
-				}
-				throw error;
-			}
+			captureResult = await sendReservedCommand(
+				ctx,
+				() => webhookOrderWhere(provider.id, orderId),
+				reservation.command,
+				() =>
+					provider.capture(
+						orderId,
+						{ totalAmount: total, shippingInfo, merchantReferenceId: reference },
+						{ logger: ctx.context.logger },
+					),
+			);
 		}
 		if (
 			captureResult.providerOrderId !== orderId ||

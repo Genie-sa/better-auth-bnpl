@@ -95,6 +95,8 @@ function requireTabbyReferenceId(
 	throw new BnplPluginError(
 		"REFERENCE_ID_REQUIRED",
 		`tabby: ${field} is required because Tabby's ${operation} API requires reference_id for idempotency`,
+		undefined,
+		{ rejected: true },
 	);
 }
 function operationRecord(
@@ -177,6 +179,8 @@ export function tabby(
 				throw new BnplPluginError(
 					"CURRENCY_NOT_SUPPORTED_BY_PROVIDER",
 					`tabby: currency ${input.totalAmount.currency} is not supported`,
+					undefined,
+					{ rejected: true },
 				);
 			}
 			const tabbyRequest = toTabbyCheckoutRequest(input, {
@@ -257,7 +261,14 @@ export function tabby(
 		): Promise<BnplCaptureResult> {
 			const referenceId = requireTabbyReferenceId(args.merchantReferenceId, "capture");
 			if (parseAmount(args.totalAmount) <= 0)
-				throw new BnplProviderError("tabby", "capture amount must be positive");
+				throw new BnplPluginError(
+					"INVALID_AMOUNT",
+					"tabby: capture amount must be positive",
+					undefined,
+					{
+						rejected: true,
+					},
+				);
 			const response = await client.capture(providerOrderId, {
 				amount: args.totalAmount.amount,
 				reference_id: referenceId,
@@ -290,7 +301,14 @@ export function tabby(
 		): Promise<BnplRefundResult> {
 			const referenceId = requireTabbyReferenceId(args.merchantRefundId, "refund");
 			if (parseAmount(args.totalAmount) <= 0)
-				throw new BnplProviderError("tabby", "refund amount must be positive");
+				throw new BnplPluginError(
+					"INVALID_AMOUNT",
+					"tabby: refund amount must be positive",
+					undefined,
+					{
+						rejected: true,
+					},
+				);
 			const response = await client.refund(providerOrderId, {
 				amount: args.totalAmount.amount,
 				reference_id: referenceId,
@@ -333,6 +351,7 @@ export function tabby(
 					throw new BnplProviderError(
 						"tabby",
 						"cancel must cover the full uncaptured balance in the payment currency",
+						{ rejected: true },
 					);
 			}
 			await closePayment(providerOrderId, ctx);

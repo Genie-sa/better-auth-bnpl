@@ -1,5 +1,6 @@
 import type { GenericEndpointContext, Where } from "better-auth";
 import { APIError } from "better-auth/api";
+import { BnplProviderError, isDefinitiveRejection } from "../core/errors";
 import { commandInputHash } from "./command-input";
 import type { MoneyOperation } from "./operation-reference";
 import { mutateOrder } from "./order-store";
@@ -12,8 +13,16 @@ export interface CommandBefore {
 	appliedOperations?: string | null;
 }
 
+type CommandEvidence = Record<string, number>;
 type Command =
-	| { key: string; hash: string; token?: string; before?: CommandBefore; state: "pending" }
+	| {
+			key: string;
+			hash: string;
+			token?: string;
+			before?: CommandBefore;
+			evidence?: CommandEvidence;
+			state: "pending";
+	  }
 	| { key: string; hash: string; state: "completed"; result: Record<string, unknown> };
 interface CommandOrder {
 	id?: string;
@@ -29,6 +38,7 @@ export interface MoneyCommandReservation {
 	hash: string;
 	token?: string;
 	before?: CommandBefore;
+	evidence?: CommandEvidence;
 }
 function readCommands(value?: string | null): Command[] {
 	if (!value) return [];
@@ -48,6 +58,11 @@ function readCommands(value?: string | null): Command[] {
 						) ||
 						(entry.before.appliedOperations != null &&
 							typeof entry.before.appliedOperations !== "string"))) ||
+				(entry.evidence !== undefined &&
+					(!entry.evidence ||
+						typeof entry.evidence !== "object" ||
+						Array.isArray(entry.evidence) ||
+						Object.values(entry.evidence).some((value) => !Number.isSafeInteger(value)))) ||
 				(entry.state !== "pending" && entry.state !== "completed") ||
 				(entry.state === "completed" &&
 					(!entry.result || typeof entry.result !== "object" || Array.isArray(entry.result))),
@@ -95,7 +110,13 @@ export async function reserveMoneyCommand<Row extends CommandOrder = CommandOrde
 					conflict("Money command outcome is uncertain; reconcile before issuing another command");
 				result = {
 					kind: "pending",
-					command: { key, hash, token: existing.token, before: existing.before },
+					command: {
+						key,
+						hash,
+						token: existing.token,
+						before: existing.before,
+						evidence: existing.evidence,
+					},
 				};
 				return null;
 			}
@@ -139,6 +160,30 @@ export function completeMoneyCommand(
 	return JSON.stringify(commands);
 }
 
+/** Persists what the provider confirmed so a retry can verify the outcome without resending. */
+export async function recordCommandEvidence(
+	ctx: GenericEndpointContext,
+	where: () => Where[],
+	reservation: MoneyCommandReservation,
+	evidence: CommandEvidence,
+): Promise<void> {
+	await mutateOrder<CommandOrder>(ctx, where, (row) => {
+		const commands = readCommands(row.moneyCommands);
+		const index = commands.findIndex((command) => command.key === reservation.key);
+		const existing = commands[index];
+		if (
+			!existing ||
+			existing.state !== "pending" ||
+			existing.hash !== reservation.hash ||
+			existing.token !== reservation.token
+		)
+			throw new Error("bnpl: money command ownership changed");
+		commands[index] = { ...existing, evidence: { ...existing.evidence, ...evidence } };
+		return { moneyCommands: JSON.stringify(commands), updatedAt: new Date() };
+	});
+	reservation.evidence = { ...reservation.evidence, ...evidence };
+}
+
 export async function releaseRejectedMoneyCommand(
 	ctx: GenericEndpointContext,
 	where: () => Where[],
@@ -160,6 +205,54 @@ export async function releaseRejectedMoneyCommand(
 	});
 }
 
+/** Best-effort release for a reservation that provably moved no money; failures are logged, not thrown. */
+export async function tryReleaseReservation(
+	ctx: GenericEndpointContext,
+	where: () => Where[],
+	reservation: MoneyCommandReservation,
+): Promise<void> {
+	try {
+		await releaseRejectedMoneyCommand(ctx, where, reservation);
+	} catch (releaseError) {
+		ctx.context.logger.error(
+			`bnpl: could not release command ${reservation.key}: ${releaseError instanceof Error ? releaseError.message : releaseError}`,
+		);
+	}
+}
+
+export async function sendReservedCommand<Result>(
+	ctx: GenericEndpointContext,
+	where: () => Where[],
+	reservation: MoneyCommandReservation,
+	request: () => Promise<Result>,
+	isRecoverable: (error: unknown) => boolean = () => false,
+): Promise<Result> {
+	try {
+		return await request();
+	} catch (error) {
+		if (isDefinitiveRejection(error) && !isRecoverable(error))
+			await tryReleaseReservation(ctx, where, reservation);
+		throw error;
+	}
+}
+
+function reportsAlready(states: readonly string[]) {
+	return (error: unknown): boolean =>
+		error instanceof BnplProviderError && error.reportsAlready(states);
+}
+export const reportsAlreadyClosed = reportsAlready(["closed"]);
+export const reportsAlreadyCanceled = reportsAlready(["canceled", "cancelled"]);
+const reportsAlreadyAuthorised = reportsAlready(["authorised", "authorized"]);
+
+export function reportsAuthorisedState(error: unknown): boolean {
+	return (
+		reportsAlreadyAuthorised(error) ||
+		(error instanceof BnplProviderError &&
+			error.conflictingState !== undefined &&
+			isAuthorisedState(error.conflictingState))
+	);
+}
+
 export function isAuthorisedState(status: string): boolean {
 	return [
 		"authorised",
@@ -168,6 +261,7 @@ export function isAuthorisedState(status: string): boolean {
 		"partially_refunded",
 		"fully_refunded",
 		"closed",
+		"updated",
 	].includes(status);
 }
 

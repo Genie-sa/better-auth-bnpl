@@ -38,6 +38,8 @@ function narrowTamaraCountry(code: string): TamaraCountryCode {
 		throw new BnplPluginError(
 			"PROVIDER_NOT_AVAILABLE",
 			`tamara does not support country code: ${code}`,
+			undefined,
+			{ rejected: true },
 		);
 	}
 	return code;
@@ -48,6 +50,8 @@ function narrowTamaraPaymentType(value: string | undefined): TamaraPaymentType |
 		throw new BnplPluginError(
 			"PROVIDER_NOT_AVAILABLE",
 			`tamara does not support paymentType: ${value}`,
+			undefined,
+			{ rejected: true },
 		);
 	}
 	return value;
@@ -100,7 +104,14 @@ export function toTamaraCheckoutRequest(
 	opts: ToTamaraCheckoutOptions = {},
 ): TamaraCheckoutRequest {
 	if (!input.shippingAddress) {
-		throw new BnplPluginError("PROVIDER_NOT_AVAILABLE", "tamara: shippingAddress is required");
+		throw new BnplPluginError(
+			"PROVIDER_NOT_AVAILABLE",
+			"tamara: shippingAddress is required",
+			undefined,
+			{
+				rejected: true,
+			},
+		);
 	}
 	const locale = input.locale ? LOCALE_MAP[input.locale] : opts.defaultLocale;
 	const providerData =
@@ -112,6 +123,7 @@ export function toTamaraCheckoutRequest(
 			"PROVIDER_NOT_AVAILABLE",
 			"tamara: providerData.riskAssessment is invalid",
 			providerData.error,
+			{ rejected: true },
 		);
 	}
 	return {

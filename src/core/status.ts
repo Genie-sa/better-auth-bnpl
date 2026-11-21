@@ -20,6 +20,11 @@ export const isCanonicalStatus = (s: string): s is CanonicalStatus => {
 	return false;
 };
 export const APPROVED_STATUSES: ReadonlySet<CanonicalStatus> = new Set(["approved", "authorised"]);
+/**
+ * Statuses conventionally treated as final for the order lifecycle. They are not all sinks:
+ * `fully_refunded` describes the captured portion, so any remaining authorisation can still be
+ * captured, and `fully_refunded` and `closed` can still receive refunds.
+ */
 export const TERMINAL_STATUSES: ReadonlySet<CanonicalStatus> = new Set([
 	"declined",
 	"expired",
@@ -43,6 +48,31 @@ export function deriveRefundedStatus(ctx: PartialFullDerivationContext): Canonic
 	}
 	return ctx.cumulativeMinor >= ctx.totalAmountMinor ? "fully_refunded" : "partially_refunded";
 }
+export interface OrderBalances {
+	amountMinor: number;
+	captured: number;
+	refunded: number;
+	canceled: number;
+}
+/** Status implied by a provider's native status once verified balances are applied. */
+export function statusFromBalances(
+	native: CanonicalStatus,
+	balances: OrderBalances,
+): CanonicalStatus {
+	if (balances.refunded > 0)
+		return deriveRefundedStatus({
+			totalAmountMinor:
+				balances.captured > 0 ? balances.captured : balances.amountMinor - balances.canceled,
+			cumulativeMinor: balances.refunded,
+		});
+	if (native === "closed") return native;
+	if (balances.captured > 0)
+		return deriveCapturedStatus({
+			totalAmountMinor: balances.amountMinor - balances.canceled,
+			cumulativeMinor: balances.captured,
+		});
+	return native === "updated" ? "authorised" : native;
+}
 const STATUS_TRANSITIONS: Readonly<Record<CanonicalStatus, ReadonlySet<CanonicalStatus>>> = {
 	new: new Set([
 		"approved",
@@ -54,6 +84,7 @@ const STATUS_TRANSITIONS: Readonly<Record<CanonicalStatus, ReadonlySet<Canonical
 		"fully_captured",
 		"partially_refunded",
 		"fully_refunded",
+		"closed",
 	]),
 	approved: new Set([
 		"authorised",
@@ -64,6 +95,7 @@ const STATUS_TRANSITIONS: Readonly<Record<CanonicalStatus, ReadonlySet<Canonical
 		"fully_captured",
 		"partially_refunded",
 		"fully_refunded",
+		"closed",
 	]),
 	authorised: new Set([
 		"expired",

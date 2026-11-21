@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { isDefinitiveRejection } from "../../../core/errors";
 import type { BnplCheckoutInput } from "../../../core/types";
 import { tabby } from "../../../providers/tabby";
 import {
@@ -322,9 +323,11 @@ describe("Tabby closure safeguards", () => {
 					);
 				},
 			});
-			await expect(provider.cancel("payment", { totalAmount: money }, ctx)).rejects.toThrow(
-				/cancel/,
-			);
+			const error = await provider
+				.cancel("payment", { totalAmount: money }, ctx)
+				.catch((cause: unknown) => cause);
+			expect(error).toMatchObject({ message: expect.stringMatching(/cancel/) });
+			expect(isDefinitiveRejection(error)).toBe(true);
 			expect(methods).toEqual(["GET"]);
 		},
 	);
@@ -477,4 +480,18 @@ describe("Tabby checkout financial identity", () => {
 		});
 		expect(fetch).toHaveBeenCalledOnce();
 	});
+	it.each(["capture", "refund"] as const)(
+		"rejects a non-positive %s before dispatch so its reservation can be released",
+		async (operation) => {
+			const fetch = vi.fn(async () => new Response(JSON.stringify(payment)));
+			const provider = tabby({ ...config, fetch });
+			const money = { amount: "0.00", currency: "SAR" } as const;
+			const error = await (operation === "capture"
+				? provider.capture("payment", { totalAmount: money, merchantReferenceId: "zero" }, ctx)
+				: provider.refund("payment", { totalAmount: money, merchantRefundId: "zero" }, ctx)
+			).catch((cause: unknown) => cause);
+			expect(isDefinitiveRejection(error)).toBe(true);
+			expect(fetch).not.toHaveBeenCalled();
+		},
+	);
 });

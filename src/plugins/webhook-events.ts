@@ -211,10 +211,13 @@ export async function saveWebhookDeliveryState(
 	row: StoredWebhookEvent,
 	state: unknown,
 ): Promise<void> {
+	const processingToken = crypto.randomUUID();
 	await updateClaimedWebhookEvent(ctx, row, {
 		deliveryState: JSON.stringify(state),
 		processingUntil: new Date(Date.now() + PROCESSING_LEASE_MS),
+		processingToken,
 	});
+	row.processingToken = processingToken;
 }
 export async function recordSyntheticProviderEvent(
 	ctx: GenericEndpointContext,

@@ -66,8 +66,8 @@ export interface TabbyPaymentDetails {
 	amount: string;
 	currency: string;
 	created_at?: string;
-	captures?: TabbyCaptureRecord[];
-	refunds?: TabbyRefundRecord[];
+	captures?: TabbyCaptureRecord[] | null;
+	refunds?: TabbyRefundRecord[] | null;
 	[k: string]: unknown;
 }
 export interface TabbyCheckoutResponse {
@@ -83,15 +83,15 @@ export interface TabbyCaptureRecord {
 	id: string;
 	amount: string;
 	created_at?: string;
-	reference_id?: string;
+	reference_id?: string | null;
 	[k: string]: unknown;
 }
 export interface TabbyRefundRecord {
 	id: string;
 	amount: string;
 	created_at?: string;
-	reference_id?: string;
-	reason?: string;
+	reference_id?: string | null;
+	reason?: string | null;
 	[k: string]: unknown;
 }
 export type TabbyCaptureRequest = z.input<typeof tabbyCaptureRequestSchema>;

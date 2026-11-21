@@ -1,9 +1,14 @@
 import type { GenericEndpointContext } from "better-auth";
 import { betterAuth } from "better-auth";
 import { describe, expect, it, vi } from "vitest";
+import { BnplProviderError } from "../../core/errors";
 import { bnpl } from "../../plugin";
-import { reserveCheckoutOrder } from "../../plugins/checkout-attempt";
-import { reserveMoneyCommand } from "../../plugins/money-command";
+import {
+	discardRejectedCheckoutReservation,
+	reserveCheckoutOrder,
+	updateCheckoutAttempt,
+} from "../../plugins/checkout-attempt";
+import { reserveMoneyCommand, sendReservedCommand } from "../../plugins/money-command";
 import { applyOrderOperation, mutateOrder } from "../../plugins/order-store";
 import { orders } from "../../plugins/orders";
 import { recordWebhookEvent } from "../../plugins/webhook-events";
@@ -319,6 +324,24 @@ describe.skipIf(!hasNodeSqlite)("mutateOrder against the real SQLite adapter", (
 				reserveMoneyCommand(ctx, ORDER_WHERE, operation, "new-reference", {}),
 			).rejects.toThrow();
 	});
+	it("releases a provider-rejected reservation so the next mutation can reserve", async () => {
+		const { ctx, readRow } = await makeSqliteCtx();
+		const first = await reserveMoneyCommand(ctx, ORDER_WHERE, "close", "ord-sqlite", {});
+		if (first.kind !== "reserved") throw new Error("missing reservation");
+		await expect(
+			sendReservedCommand(ctx, ORDER_WHERE, first.command, async () => {
+				throw new BnplProviderError("tabby", "only authorized payments can be closed", {
+					status: 400,
+					rejected: true,
+				});
+			}),
+		).rejects.toThrow("only authorized payments can be closed");
+		const row = (await readRow()) as OrderRow & { moneyCommands: string };
+		expect(JSON.parse(row.moneyCommands)).toEqual([]);
+		expect((await reserveMoneyCommand(ctx, ORDER_WHERE, "capture", "next", {})).kind).toBe(
+			"reserved",
+		);
+	});
 	it("retains the cancellation baseline across intervening balance changes and retries", async () => {
 		const { ctx } = await makeSqliteCtx();
 		const first = await reserveMoneyCommand(ctx, ORDER_WHERE, "cancel", "stable", {});
@@ -459,6 +482,43 @@ describe.skipIf(!hasNodeSqlite)("mutateOrder against the real SQLite adapter", (
 });
 
 describe.skipIf(!hasNodeSqlite)("checkout reservations against SQLite", () => {
+	const checkoutData = (orderReferenceId: string) => ({
+		userId: "buyer",
+		provider: "tabby",
+		orderReferenceId,
+		status: "new" as const,
+		amountMinor: 10000,
+		currency: "SAR",
+		capturedAmountMinor: 0,
+		refundedAmountMinor: 0,
+	});
+	const countReference = (ctx: GenericEndpointContext, orderReferenceId: string) =>
+		ctx.context.adapter.count({
+			model: "bnplOrder",
+			where: [{ field: "orderReferenceId", value: orderReferenceId }],
+		});
+	it("discards a rejected reservation and lets the reference be reserved again", async () => {
+		const { ctx } = await makeSqliteCtx();
+		const first = await reserveCheckoutOrder(ctx, checkoutData("rejected-checkout"), "hash");
+		await discardRejectedCheckoutReservation(ctx, first.row, "hash");
+		expect(await countReference(ctx, "rejected-checkout")).toBe(0);
+		const second = await reserveCheckoutOrder(ctx, checkoutData("rejected-checkout"), "other");
+		expect(second.reserved).toBe(true);
+	});
+	it("never discards a reservation that already recorded a provider result", async () => {
+		const { ctx } = await makeSqliteCtx();
+		const first = await reserveCheckoutOrder(ctx, checkoutData("settled-checkout"), "hash");
+		await updateCheckoutAttempt(ctx, first.row, "hash", {
+			result: {
+				providerOrderId: "settled-order",
+				providerCheckoutId: "settled-session",
+				checkoutUrl: "https://provider.example/checkout",
+				status: "new",
+			},
+		});
+		await discardRejectedCheckoutReservation(ctx, first.row, "hash");
+		expect(await countReference(ctx, "settled-checkout")).toBe(1);
+	});
 	it("lets only one worker reserve a new reference when both initial reads miss", async () => {
 		const { ctx } = await makeSqliteCtx();
 		const adapter = ctx.context.adapter;

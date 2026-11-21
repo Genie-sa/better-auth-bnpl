@@ -30,6 +30,7 @@ export const BNPL_ERROR_CODES = defineBnplErrorCodes({
 	MONEY_COMMAND_CONFLICT: "Order operation conflicts with an existing or uncertain command",
 	INVALID_CANCEL_REFERENCE: "Amount-bearing cancellation requires merchantReferenceId",
 	INVALID_URL: "URL must be an absolute HTTP(S) URL",
+	INVALID_RESOURCE_ID: "Provider resource ID must be nonempty and cannot be a dot segment",
 	RESOLVE_CHECKOUT_INCOMPLETE:
 		"resolveCheckout must return totalAmount, items, and the other canonical money fields",
 	ORDER_NOT_FOUND: "Order not found",
@@ -69,12 +70,20 @@ export const BNPL_ERROR_CODES = defineBnplErrorCodes({
 export type BnplErrorCode = keyof typeof BNPL_ERROR_CODES;
 export class BnplPluginError extends Error {
 	readonly code: BnplErrorCode;
+	/** Validation failed before any provider request was sent. */
+	readonly rejected: boolean;
 	override readonly cause?: unknown;
-	constructor(code: BnplErrorCode, message?: string, cause?: unknown) {
+	constructor(
+		code: BnplErrorCode,
+		message?: string,
+		cause?: unknown,
+		init?: { rejected?: boolean },
+	) {
 		super(message ?? BNPL_ERROR_CODES[code].message);
 		this.name = "BnplPluginError";
 		this.code = code;
 		this.cause = cause;
+		this.rejected = init?.rejected === true;
 	}
 }
 export const isBnplPluginError = (e: unknown): e is BnplPluginError => e instanceof BnplPluginError;
@@ -82,6 +91,8 @@ export class BnplProviderError extends Error {
 	readonly provider: string;
 	readonly status?: number;
 	readonly body?: unknown;
+	/** The provider answered and provably did not apply the operation, whatever the HTTP status. */
+	readonly rejected: boolean;
 	override readonly cause?: unknown;
 	constructor(
 		provider: string,
@@ -90,6 +101,7 @@ export class BnplProviderError extends Error {
 			status?: number;
 			body?: unknown;
 			cause?: unknown;
+			rejected?: boolean;
 		},
 	) {
 		super(message);
@@ -98,17 +110,59 @@ export class BnplProviderError extends Error {
 		this.status = init?.status;
 		this.body = init?.body;
 		this.cause = init?.cause;
+		this.rejected = init?.rejected === true;
 	}
 	get isAlreadyInTargetState(): boolean {
-		if (this.status !== 400 && this.status !== 409) return false;
-		const body = this.body;
-		if (!body || typeof body !== "object" || !("message" in body)) return false;
-		const message = body.message;
-		if (typeof message !== "string") return false;
-		return /\balready\s+(?:authori[sz]ed|captured|refunded|canceled|cancelled|closed)\b/i.test(
-			message,
-		);
+		return this.reportsAlready([
+			"authorised",
+			"authorized",
+			"captured",
+			"refunded",
+			"canceled",
+			"cancelled",
+			"closed",
+		]);
 	}
+	/** True when the provider refused because the order is already in one of `states`. */
+	reportsAlready(states: readonly string[]): boolean {
+		if (this.status !== 400 && this.status !== 409 && this.status !== 422) return false;
+		const pattern = new RegExp(`\\balready\\s+(?:been\\s+)?(?:${states.join("|")})\\b`, "i");
+		return providerMessages(this.body).some((message) => pattern.test(message));
+	}
+	/** The order state a provider reported when refusing a transition (Tamara `transition_not_allowed`). */
+	get conflictingState(): string | undefined {
+		const errors = isErrorBody(this.body) ? this.body.errors : undefined;
+		if (!Array.isArray(errors)) return undefined;
+		for (const error of errors) {
+			if (!isErrorBody(error) || error.error_code !== "transition_not_allowed") continue;
+			const data = error.data;
+			if (isErrorBody(data) && typeof data.old_state === "string") return data.old_state;
+		}
+		return undefined;
+	}
+}
+function isErrorBody(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function providerMessages(body: unknown): string[] {
+	if (!isErrorBody(body)) return [];
+	const nested = Array.isArray(body.errors)
+		? body.errors.flatMap((error) => (isErrorBody(error) ? [error.message] : []))
+		: [];
+	return [body.message, body.error, ...nested].filter(
+		(message): message is string => typeof message === "string",
+	);
 }
 export const isBnplProviderError = (e: unknown): e is BnplProviderError =>
 	e instanceof BnplProviderError;
+
+/**
+ * True only for errors explicitly marked `rejected`: validation failed before any request, or the
+ * mutation's own response proves the provider refused it. A bare HTTP status is never enough,
+ * because a provider method may fail on a follow-up read after its mutation succeeded. Callers that
+ * can verify through GET treat "already in target state" refusals as recoverable instead.
+ */
+export function isDefinitiveRejection(error: unknown): boolean {
+	if (error instanceof BnplPluginError) return error.rejected;
+	return error instanceof BnplProviderError && error.rejected;
+}

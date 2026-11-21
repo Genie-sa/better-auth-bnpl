@@ -143,6 +143,38 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	"/api/v1/dispute-webhooks": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get: operations["getDisputeWebhooks"];
+		put?: never;
+		post: operations["postDisputeWebhook"];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/api/v1/dispute-webhooks/{id}": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get: operations["getDisputeWebhook"];
+		put: operations["putDisputeWebhook"];
+		post?: never;
+		delete: operations["deleteDisputeWebhook"];
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	"/api/v1/disputes": {
 		parameters: {
 			query?: never;
@@ -244,7 +276,7 @@ export type webhooks = Record<string, never>;
 export interface components {
 	schemas: {
 		Attachment_V1: {
-			body: {
+			body?: {
 				flight_reservation_details?: components["schemas"]["FlightReservationDetails"];
 				hotel_reservation_details?: components["schemas"]["HotelReservationDetails"];
 				insurance_details?: components["schemas"]["InsuranceDetails"];
@@ -253,6 +285,21 @@ export interface components {
 				flight_points_simple?: components["schemas"]["FlightPointsSimple"];
 				marketplaces?: components["schemas"]["Marketplaces"];
 				education_details?: components["schemas"]["EducationDetails"];
+			};
+			content_type: string;
+		} | null;
+		CheckoutAttachment: {
+			body?: {
+				flight_reservation_details?: components["schemas"]["FlightReservationDetails"];
+				hotel_reservation_details?: components["schemas"]["HotelReservationDetails"];
+				insurance_details?: components["schemas"]["InsuranceDetails"];
+				payment_history_full?: components["schemas"]["AttachmentPaymentHistoryFull"];
+				payment_history_simple?: components["schemas"]["AttachmentPaymentHistorySimple"];
+				flight_points_simple?: components["schemas"]["FlightPointsSimple"];
+				marketplaces?: components["schemas"]["Marketplaces"];
+				education_details?: components["schemas"]["EducationDetails"];
+				latitude?: number;
+				longitude?: number;
 			};
 			content_type: string;
 		} | null;
@@ -274,14 +321,14 @@ export interface components {
 			date_of_first_paid_purchase?: string;
 		};
 		EducationDetails: {
-			merchant_subtype: "formal_education" | "courses_training";
-			program: {
-				payment_tenure_months: number;
-				months_to_completion: number;
+			merchant_subtype?: "formal_education" | "courses_training";
+			program?: {
+				payment_tenure_months?: number;
+				months_to_completion?: number;
 			};
-			student_history: {
-				late_payments_count: number;
-				avg_overdue_duration_days: number;
+			student_history?: {
+				late_payments_count?: number;
+				avg_overdue_duration_days?: number;
 				observation_window_months?: number;
 			};
 		};
@@ -340,23 +387,34 @@ export interface components {
 		CheckoutCreation: {
 			amount: components["schemas"]["PaymentAmount"];
 			currency: components["schemas"]["Currency"];
-			description?: string;
 			buyer: components["schemas"]["Buyer"];
 			shipping_address: components["schemas"]["ShippingAddress"];
 			order: components["schemas"]["Order"];
 			buyer_history: components["schemas"]["BuyerHistory"];
-			order_history: components["schemas"]["CheckoutCreationOrderHistory"][];
+			order_history?: components["schemas"]["CheckoutCreationOrderHistory"][];
+			description?: string;
 			meta?: components["schemas"]["Meta"];
-			attachment?: components["schemas"]["Attachment_V1"];
+			attachment?: components["schemas"]["CheckoutAttachment"];
 		};
 		CheckoutCreationOrderHistory: {
-			purchased_at: string;
-			amount: components["schemas"]["PaymentAmount"];
+			purchased_at?: string;
+			amount?: components["schemas"]["PaymentAmount"];
+			status?: "new" | "processing" | "complete" | "refunded" | "canceled" | "unknown";
+			buyer?: components["schemas"]["OrderHistoryBuyer"];
+			shipping_address?: components["schemas"]["OrderHistoryShippingAddress"];
 			payment_method?: "card" | "cod";
-			status: "new" | "processing" | "complete" | "refunded" | "canceled" | "unknown";
-			buyer: components["schemas"]["Buyer"];
-			shipping_address: components["schemas"]["ShippingAddress"];
 			items?: components["schemas"]["OrderItemHistoryRequest"][];
+		};
+		OrderHistoryBuyer: {
+			name?: string;
+			email?: string;
+			phone?: string;
+			dob?: string;
+		};
+		OrderHistoryShippingAddress: {
+			city?: string;
+			address?: string;
+			zip?: string;
 		};
 		CheckoutProduct: {
 			readonly type: "installments";
@@ -399,8 +457,11 @@ export interface components {
 				cancel?: string | null;
 				failure?: string | null;
 			};
+			readonly merchant?: {
+				name?: string;
+			};
 		};
-		Currency: "AED" | "SAR" | "KWD";
+		Currency: "AED" | "SAR";
 		Dispute: {
 			id: components["schemas"]["DisputeID"];
 			attachments: components["schemas"]["DisputeAttachments"];
@@ -483,18 +544,17 @@ export interface components {
 			| "evidence_merchant"
 			| "evidence_customer";
 		FlightPointsSimple: {
-			origin: {
-				air_code: string;
-				city_code: string;
+			origin?: {
+				air_code?: string;
+				city_code?: string;
 			};
-			destination: {
-				air_code: string;
-				city_code: string;
+			destination?: {
+				air_code?: string;
+				city_code?: string;
 			};
 		};
 		FlightReservationDetails: {
-			pnr?: string;
-			itinerary: {
+			itinerary?: {
 				departure_city?: string;
 				departure_country?: string;
 				arrival_city?: string;
@@ -504,12 +564,12 @@ export interface components {
 				class?: string;
 				refundable?: boolean;
 			}[];
-			insurance: {
+			insurance?: {
 				insurance_company?: string;
 				insurance_type?: string;
 				insurance_price?: number;
 			}[];
-			passengers: {
+			passengers?: {
 				full_name?: string;
 				first_name?: string;
 				last_name?: string;
@@ -520,11 +580,11 @@ export interface components {
 				nationality?: string;
 				gender?: "F" | "M" | "O";
 			}[];
+			pnr?: string;
 			affiliate_name?: string;
 		};
 		HotelReservationDetails: {
-			pnr?: string;
-			hotel_itinerary: {
+			hotel_itinerary?: {
 				hotel_name?: string;
 				address?: string;
 				hotel_city?: string;
@@ -534,12 +594,12 @@ export interface components {
 				number_of_rooms?: number;
 				class?: string;
 			}[];
-			insurance: {
+			insurance?: {
 				insurance_company?: string;
 				insurance_type?: string;
 				insurance_price?: number;
 			}[];
-			passengers: {
+			passengers?: {
 				full_name?: string;
 				first_name?: string;
 				last_name?: string;
@@ -550,53 +610,54 @@ export interface components {
 				nationality?: string;
 				gender?: "F" | "M" | "O";
 			}[];
+			pnr?: string;
 			affiliate_name?: string;
 		};
 		InsuranceDetails: {
-			policy_details: {
-				insurance_type: string;
-				insurance_start_dt: string;
-				insurance_end_dt: string;
-				insured_amount: string;
+			policy_details?: {
+				insurance_type?: string;
+				insurance_start_dt?: string;
+				insurance_end_dt?: string;
+				insured_amount?: string;
 				car_details?: {
-					manufacturer: string;
-					model: string;
-					year: string;
+					manufacturer?: string;
+					model?: string;
+					year?: string;
 				};
 				travel_details?: {
-					departure_country: string;
-					arrival_country: string;
+					departure_country?: string;
+					arrival_country?: string;
 				};
 				refundable?: boolean;
 				provider_name?: string;
 			};
-			client: {
+			client?: {
+				first_name?: string;
+				last_name?: string;
+				document_type?: string;
 				full_name?: string;
-				first_name: string;
-				last_name: string;
 				dob?: string;
-				document_type: string;
 				document_id?: string;
 				expiration_id_dt?: string;
 				nationality?: string;
 				gender?: unknown;
 			};
 			payment_history_simple?: {
+				date_of_last_paid_purchase?: string;
+				date_of_first_paid_purchase?: string;
 				unique_account_identifier?: string;
 				paid_before_flag?: boolean;
-				date_of_last_paid_purchase: string;
-				date_of_first_paid_purchase: string;
 			};
 		};
 		LanguageCode: "ar" | "en";
 		Marketplaces: {
-			seller_id: string;
-			seller_name: string;
-			seller_category: string;
-			seller_website: string;
-			seller_phone: string;
-			seller_registration_date: string;
-			seller_commercial_registration_number: string;
+			seller_id?: string;
+			seller_name?: string;
+			seller_category?: string;
+			seller_website?: string;
+			seller_phone?: string;
+			seller_registration_date?: string;
+			seller_commercial_registration_number?: string;
 		};
 		MerchantUrls: {
 			success?: string;
@@ -896,6 +957,22 @@ export interface components {
 			readonly id: string;
 			url: string;
 		};
+		DisputeWebhookRequest: {
+			url: string;
+			header?: {
+				title: string;
+				value: string;
+			};
+		};
+		DisputeWebhook: {
+			readonly id: string;
+			url: string;
+			header?: {
+				title?: string;
+				value?: string;
+			} | null;
+		};
+		DisputeWebhookAll: components["schemas"]["DisputeWebhook"][];
 		Error_400: {
 			status?: string;
 			errorType?: string;
@@ -975,6 +1052,16 @@ export interface components {
 			errorType?: string;
 			error?: string;
 		};
+		Error_404_no_session: {
+			status?: string;
+			errorType?: string;
+			error?: string;
+		};
+		Error_400_invalid_session_id: {
+			status?: string;
+			errorType?: string;
+			error?: string;
+		};
 		Error_404_no_such_payment: {
 			status?: string;
 			errorType?: string;
@@ -985,12 +1072,36 @@ export interface components {
 			errorType?: string;
 			error?: string;
 		};
+		Error_403_no_test_mode: {
+			status?: string;
+			errorType?: string;
+			error?: string;
+		};
+		Error_404_webhook_not_found: {
+			status?: string;
+			errorType?: string;
+			error?: string;
+		};
 		Error_409: {
 			status?: string;
 			errorType?: string;
 			error?: string;
 		};
-		Error_500: string;
+		Error_409_locked: {
+			status?: string;
+			errorType?: string;
+			error?: string;
+		};
+		Error_500: {
+			status?: string;
+			errorType?: string;
+			error?: string;
+		};
+		Error_500_internal: {
+			status?: string;
+			errorType?: string;
+			error?: string;
+		};
 	};
 	responses: {
 		CheckoutSession: {
@@ -1090,6 +1201,14 @@ export interface components {
 			};
 			content: {
 				"application/json": components["schemas"]["Error_409"];
+			};
+		};
+		ConflictError_locked: {
+			headers: {
+				[name: string]: unknown;
+			};
+			content: {
+				"application/json": components["schemas"]["Error_409_locked"];
 			};
 		};
 		PaymentRefundResponse: {
@@ -1303,6 +1422,22 @@ export interface components {
 				"application/json": components["schemas"]["Error_404_dispute_not_found"];
 			};
 		};
+		NotFoundError_no_session: {
+			headers: {
+				[name: string]: unknown;
+			};
+			content: {
+				"application/json": components["schemas"]["Error_404_no_session"];
+			};
+		};
+		BadRequestError_invalid_session_id: {
+			headers: {
+				[name: string]: unknown;
+			};
+			content: {
+				"application/json": components["schemas"]["Error_400_invalid_session_id"];
+			};
+		};
 		NotFoundError_no_such_payment: {
 			headers: {
 				[name: string]: unknown;
@@ -1319,6 +1454,38 @@ export interface components {
 				"application/json": components["schemas"]["Error_404_no_such_webhook"];
 			};
 		};
+		DisputeWebhook: {
+			headers: {
+				[name: string]: unknown;
+			};
+			content: {
+				"application/json": components["schemas"]["DisputeWebhook"];
+			};
+		};
+		DisputeWebhookAll: {
+			headers: {
+				[name: string]: unknown;
+			};
+			content: {
+				"application/json": components["schemas"]["DisputeWebhookAll"];
+			};
+		};
+		ForbiddenError_no_test_mode: {
+			headers: {
+				[name: string]: unknown;
+			};
+			content: {
+				"application/json": components["schemas"]["Error_403_no_test_mode"];
+			};
+		};
+		NotFoundError_webhook_not_found: {
+			headers: {
+				[name: string]: unknown;
+			};
+			content: {
+				"application/json": components["schemas"]["Error_404_webhook_not_found"];
+			};
+		};
 		UnexpectedError: {
 			headers: {
 				[name: string]: unknown;
@@ -1327,12 +1494,21 @@ export interface components {
 				"application/json": components["schemas"]["Error_500"];
 			};
 		};
+		UnexpectedError_internal: {
+			headers: {
+				[name: string]: unknown;
+			};
+			content: {
+				"application/json": components["schemas"]["Error_500_internal"];
+			};
+		};
 	};
 	parameters: {
 		paymentIdParam: string;
 		webhookIdParam: string;
 		refundIdParam: string;
 		merchantCodeParam: string;
+		disputeMerchantCodeParam: string;
 		sessionIdParam: string;
 		disputeIdParam: string;
 	};
@@ -1381,10 +1557,10 @@ export interface operations {
 		requestBody?: never;
 		responses: {
 			200: components["responses"]["CheckoutSession"];
-			400: components["responses"]["BadRequestError"];
+			400: components["responses"]["BadRequestError_invalid_session_id"];
 			401: components["responses"]["AuthenticationError_key_doesnt_exist"];
 			403: components["responses"]["ForbiddenError"];
-			404: components["responses"]["NotFoundError"];
+			404: components["responses"]["NotFoundError_no_session"];
 			500: components["responses"]["UnexpectedError"];
 		};
 	};
@@ -1428,7 +1604,6 @@ export interface operations {
 			200: components["responses"]["PaymentUpdate"];
 			400: components["responses"]["BadRequestError_PaymentsGet"];
 			401: components["responses"]["AuthenticationError"];
-			403: components["responses"]["ForbiddenError"];
 			404: components["responses"]["NotFoundError_no_such_payment"];
 			500: components["responses"]["UnexpectedError"];
 		};
@@ -1451,8 +1626,8 @@ export interface operations {
 			200: components["responses"]["PaymentCaptureResponse"];
 			400: components["responses"]["BadRequestError_PaymentsCapture"];
 			401: components["responses"]["AuthenticationError"];
-			403: components["responses"]["ForbiddenError"];
 			404: components["responses"]["NotFoundError_no_such_payment"];
+			409: components["responses"]["ConflictError_locked"];
 			500: components["responses"]["UnexpectedError"];
 		};
 	};
@@ -1474,7 +1649,6 @@ export interface operations {
 			200: components["responses"]["PaymentRefundResponse"];
 			400: components["responses"]["BadRequestError_PaymentsRefund"];
 			401: components["responses"]["AuthenticationError"];
-			403: components["responses"]["ForbiddenError"];
 			404: components["responses"]["NotFoundError_no_such_payment"];
 			409: components["responses"]["PaymentRefundError"];
 			500: components["responses"]["UnexpectedError"];
@@ -1494,7 +1668,6 @@ export interface operations {
 			200: components["responses"]["PaymentClose"];
 			400: components["responses"]["BadRequestError_PaymentsClose"];
 			401: components["responses"]["AuthenticationError"];
-			403: components["responses"]["ForbiddenError"];
 			404: components["responses"]["NotFoundError_no_such_payment"];
 			500: components["responses"]["UnexpectedError"];
 		};
@@ -1605,7 +1778,6 @@ export interface operations {
 			200: components["responses"]["WebhookUpdate"];
 			400: components["responses"]["BadRequestError_bad_request"];
 			401: components["responses"]["AuthenticationError_authorization"];
-			403: components["responses"]["ForbiddenError"];
 			404: components["responses"]["NotFoundError_no_such_webhook"];
 			500: components["responses"]["UnexpectedError"];
 		};
@@ -1627,6 +1799,113 @@ export interface operations {
 			401: components["responses"]["AuthenticationError_invalid_secret_key"];
 			404: components["responses"]["NotFoundError_no_such_webhook"];
 			500: components["responses"]["UnexpectedError"];
+		};
+	};
+	getDisputeWebhooks: {
+		parameters: {
+			query?: never;
+			header: {
+				"X-Merchant-Code": components["parameters"]["disputeMerchantCodeParam"];
+			};
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			200: components["responses"]["DisputeWebhookAll"];
+			400: components["responses"]["BadRequestError_bad_request"];
+			401: components["responses"]["AuthenticationError_invalid_secret_key"];
+			403: components["responses"]["ForbiddenError_no_test_mode"];
+			500: components["responses"]["UnexpectedError_internal"];
+		};
+	};
+	postDisputeWebhook: {
+		parameters: {
+			query?: never;
+			header: {
+				"X-Merchant-Code": components["parameters"]["disputeMerchantCodeParam"];
+			};
+			path?: never;
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				"application/json": components["schemas"]["DisputeWebhookRequest"];
+			};
+		};
+		responses: {
+			200: components["responses"]["DisputeWebhook"];
+			400: components["responses"]["BadRequestError_bad_request"];
+			401: components["responses"]["AuthenticationError_invalid_secret_key"];
+			403: components["responses"]["ForbiddenError_no_test_mode"];
+			500: components["responses"]["UnexpectedError_internal"];
+		};
+	};
+	getDisputeWebhook: {
+		parameters: {
+			query?: never;
+			header: {
+				"X-Merchant-Code": components["parameters"]["disputeMerchantCodeParam"];
+			};
+			path: {
+				id: components["parameters"]["webhookIdParam"];
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			200: components["responses"]["DisputeWebhook"];
+			400: components["responses"]["BadRequestError_bad_request"];
+			401: components["responses"]["AuthenticationError_invalid_secret_key"];
+			403: components["responses"]["ForbiddenError_no_test_mode"];
+			404: components["responses"]["NotFoundError_webhook_not_found"];
+			500: components["responses"]["UnexpectedError_internal"];
+		};
+	};
+	putDisputeWebhook: {
+		parameters: {
+			query?: never;
+			header: {
+				"X-Merchant-Code": components["parameters"]["disputeMerchantCodeParam"];
+			};
+			path: {
+				id: components["parameters"]["webhookIdParam"];
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				"application/json": components["schemas"]["DisputeWebhookRequest"];
+			};
+		};
+		responses: {
+			200: components["responses"]["DisputeWebhook"];
+			400: components["responses"]["BadRequestError_bad_request"];
+			401: components["responses"]["AuthenticationError_invalid_secret_key"];
+			403: components["responses"]["ForbiddenError_no_test_mode"];
+			404: components["responses"]["NotFoundError_webhook_not_found"];
+			500: components["responses"]["UnexpectedError_internal"];
+		};
+	};
+	deleteDisputeWebhook: {
+		parameters: {
+			query?: never;
+			header: {
+				"X-Merchant-Code": components["parameters"]["disputeMerchantCodeParam"];
+			};
+			path: {
+				id: components["parameters"]["webhookIdParam"];
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			200: components["responses"]["WebhookDelete"];
+			400: components["responses"]["BadRequestError_bad_request"];
+			401: components["responses"]["AuthenticationError_invalid_secret_key"];
+			403: components["responses"]["ForbiddenError_no_test_mode"];
+			404: components["responses"]["NotFoundError_webhook_not_found"];
+			500: components["responses"]["UnexpectedError_internal"];
 		};
 	};
 	getDisputes: {

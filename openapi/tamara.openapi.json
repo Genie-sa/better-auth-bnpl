@@ -60,7 +60,8 @@
                   "tax_amount",
                   "shipping_amount",
                   "merchant_url",
-                  "instalments"
+                  "instalments",
+                  "risk_assessment"
                 ],
                 "properties": {
                   "total_amount": {
@@ -113,7 +114,7 @@
                   },
                   "tax_amount": {
                     "type": "object",
-                    "description": "Total amount of taxes, if additionally applied.",
+                    "description": "Total amount of taxes, if additionally applied.\nNegative values should not be passed.",
                     "properties": {
                       "amount": {
                         "type": "string",
@@ -157,7 +158,6 @@
                     "properties": {
                       "name": {
                         "type": "string",
-                        "example": "Christmas 2020",
                         "default": "Voucher A"
                       },
                       "amount": {
@@ -165,23 +165,21 @@
                         "properties": {
                           "amount": {
                             "type": "number",
-                            "example": 200,
-                            "minimum": 0,
-                            "default": 0
+                            "default": "300"
                           },
                           "currency": {
                             "type": "string",
                             "enum": [
                               "SAR",
-                              "AED",
-                              "BHD",
-                              "KWD",
-                              "OMR"
+                              "AED"
                             ],
-                            "example": "SAR",
                             "default": "SAR"
                           }
-                        }
+                        },
+                        "required": [
+                          "amount",
+                          "currency"
+                        ]
                       }
                     }
                   },
@@ -582,155 +580,92 @@
                   },
                   "risk_assessment": {
                     "type": "object",
-                    "description": "Risk assessment info from the merchant side",
+                    "description": "Risk assessment information from the merchant side",
                     "properties": {
-                      "customer_age": {
-                        "type": "integer",
-                        "description": "Customer age in Years",
-                        "example": 21,
-                        "default": 21
-                      },
-                      "customer_dob": {
-                        "type": "string",
-                        "description": "Customer Date of Birth (format dd-mm-yyyy)",
-                        "example": "01-12-2000",
-                        "maximum": 10,
-                        "default": "01-12-2000"
-                      },
-                      "customer_gender": {
-                        "type": "string",
-                        "enum": [
-                          "Male",
-                          "Female"
-                        ],
-                        "description": "Customer's gender",
-                        "default": "Female"
-                      },
-                      "customer_nationality": {
-                        "type": "string",
-                        "description": "Customer nationality code (ISO 2 letter)",
-                        "example": "SA or IN or KW",
-                        "default": "SA"
-                      },
                       "is_premium_customer": {
                         "type": "boolean",
-                        "description": "Is VIP or any kind of premium customer tiers like Platinum, Gold...etc",
-                        "example": false,
-                        "default": false
-                      },
-                      "is_existing_customer": {
-                        "type": "boolean",
-                        "description": "Customer's account was created in the past, not on the same day as the order is created.",
-                        "example": false,
-                        "default": false
-                      },
-                      "is_guest_user": {
-                        "type": "boolean",
-                        "description": "Is the customer performing guest checkout on your store.",
-                        "example": false,
-                        "default": false
+                        "description": "Any subscription package/ VIP segmentation of customers(if available)",
+                        "default": "false"
                       },
                       "account_creation_date": {
                         "type": "string",
-                        "description": "Date of customer registration of their account (format dd-mm-yyyy)",
-                        "example": "12-06-2020",
-                        "maximum": 10,
-                        "default": "12-06-2020"
-                      },
-                      "platform_account_creation_date": {
-                        "type": "string",
-                        "description": "Date of customer registration of their account with the platform like Salla (format dd-mm-yyyy)",
-                        "example": "12-06-2020",
-                        "maximum": 10,
-                        "default": "12-06-2020"
-                      },
-                      "date_of_first_transaction": {
-                        "type": "string",
-                        "description": "Date of consumer’s first transaction. (format dd-mm-yyyy)",
-                        "example": "12-06-2020",
-                        "maximum": 10,
-                        "default": "12-06-2020"
-                      },
-                      "is_card_on_file": {
-                        "type": "boolean",
-                        "description": "Does customer have any saved cards on his account?",
-                        "example": true,
-                        "default": false
-                      },
-                      "is_COD_customer": {
-                        "type": "boolean",
-                        "description": "Does customer only use Cash on Delivery as their payment method previously?",
-                        "example": false,
-                        "default": false
-                      },
-                      "has_delivered_order": {
-                        "type": "boolean",
-                        "description": "Does the customer have successfully delivered orders in the past?",
-                        "example": false,
-                        "default": true
-                      },
-                      "is_phone_verified": {
-                        "type": "boolean",
-                        "description": "Is the customer's registered phone verified?",
-                        "example": false,
-                        "default": false
-                      },
-                      "is_fraudulent_customer": {
-                        "type": "boolean",
-                        "description": "Does customer have any history of fraudulent activity in your records like false chargebacks, stolen card usage etc.?",
-                        "example": false,
-                        "default": false
-                      },
-                      "total_ltv": {
-                        "type": "number",
-                        "description": "Lifetime value. The total amount (in local currency) the consumer has ordered, excluding canceled, rejected, or refunded transactions. Also excluding **Tamara** payments.",
-                        "example": 200,
-                        "default": 200
+                        "description": "Date when the customer registered their account at merchant (format: dd-mm-yyyy)",
+                        "default": "01-01-2001"
                       },
                       "total_order_count": {
                         "type": "integer",
-                        "description": "Number of orders the customer has made at your store since creating an account, excluding canceled, rejected, or refunded transactions. Also excluding **Tamara** payments.",
-                        "example": 15,
-                        "default": 15
+                        "description": "No. of successful orders of customer on merchant",
+                        "default": "1"
                       },
-                      "order_amount_last3months": {
-                        "type": "number",
-                        "description": "Amount the consumer spent in the last 3 months, excluding canceled, rejected, or refunded transactions. Also excluding **Tamara** payments.",
-                        "example": 2000,
-                        "default": 2000
-                      },
-                      "order_count_last3months": {
+                      "risk_score": {
                         "type": "integer",
-                        "description": "Number of orders the consumer placed in the last 3 months, excluding canceled, rejected, or refunded transactions. Also excluding **Tamara** payments.",
-                        "example": 10,
-                        "default": 10
+                        "description": "Aggregated transaction/ customer risk score by merchant(if available)",
+                        "default": "0"
                       },
-                      "last_order_date": {
+                      "date_first_paid": {
                         "type": "string",
-                        "description": "Date on which the consumer made their last purchase, excluding **Tamara** payments (format dd-mm-yyyy)",
-                        "example": "12-06-2020",
-                        "maximum": 10,
-                        "default": "12-06-2020"
+                        "description": "Date of first successful order. Will be null if first order (format: dd-mm-yyyy)",
+                        "default": "01-01-2001"
                       },
-                      "last_order_amount": {
-                        "type": "number",
-                        "description": "Amount (in local currency) of the last order, excluding **Tamara** payments.",
-                        "example": 2000,
-                        "default": 2000
+                      "date_last_paid": {
+                        "type": "string",
+                        "description": "Date of last successful order. Will be null if first order (format: dd-mm-yyyy)",
+                        "default": "01-01-2001"
                       },
-                      "reward_program_enrolled": {
-                        "type": "boolean",
-                        "description": "Is customer enrolled in any of your reward program?",
-                        "example": false,
-                        "default": false
+                      "order_count_last_24h": {
+                        "type": "integer",
+                        "description": "No. of successful orders of customer on merchant, in the last 24 hours",
+                        "default": "1"
                       },
-                      "reward_program_points": {
-                        "type": "number",
-                        "description": "Number of reward points earned by the customer so far.",
-                        "example": 2000,
-                        "default": 2000
+                      "account_security": {
+                        "type": "object",
+                        "properties": {
+                          "is_email_verified": {
+                            "type": "boolean",
+                            "default": "false",
+                            "description": "true if email is verified by merchant."
+                          },
+                          "is_phone_verified": {
+                            "type": "boolean",
+                            "description": "true if phone is verified by merchant.",
+                            "default": "false"
+                          },
+                          "password_last_changed": {
+                            "type": "string",
+                            "description": "Date of last password reset (format: dd-mm-yyyy).",
+                            "default": "01-01-2001"
+                          },
+                          "last_login_date": {
+                            "type": "string",
+                            "description": "Date of last login (format: dd-mm-yyyy).",
+                            "default": "01-01-2001"
+                          },
+                          "last_verification_method": {
+                            "type": "string",
+                            "description": "Method used for last authentication, for e.g., OTP, Biometric, etc..",
+                            "default": "OTP"
+                          },
+                          "device_id": {
+                            "type": "string",
+                            "description": "Unique device fingerprint/ID from merchant. Any Hash (#) device ID",
+                            "default": "#123"
+                          },
+                          "devices_linked": {
+                            "type": "integer",
+                            "description": "Number of active devices linked to the account.",
+                            "default": "1"
+                          }
+                        },
+                        "description": "Security and identity signals."
                       }
-                    }
+                    },
+                    "required": [
+                      "is_premium_customer",
+                      "account_creation_date",
+                      "total_order_count",
+                      "date_first_paid",
+                      "date_last_paid"
+                    ]
                   },
                   "expires_in_minutes": {
                     "type": "integer",
@@ -2597,7 +2532,7 @@
         "tags": [
           "Refunds"
         ],
-        "summary": "Simplified Refund",
+        "summary": "Refund",
         "description": "This API is to be used to process refunds for captured orders.",
         "operationId": "simplifiedRefund",
         "requestBody": {
@@ -2955,7 +2890,7 @@
     },
     "/pre-checkout/v1/eligibility": {
       "post": {
-        "description": "This endpoint helps you to check whether Tamara treats a customer as eligible or not, based on active decline records we hold for that customer.",
+        "description": "This endpoint helps you check if Tamara treats a customer as eligible based on the active decline records we hold for that customer.",
         "responses": {
           "200": {
             "description": "",
@@ -3020,9 +2955,13 @@
                   "customer": {
                     "type": "object",
                     "properties": {
-                      "phone": {
+                      "phone_number": {
                         "type": "string",
                         "default": "966501234567"
+                      },
+                      "email": {
+                        "type": "string",
+                        "default": "precheck-fallback@example.com"
                       }
                     }
                   }

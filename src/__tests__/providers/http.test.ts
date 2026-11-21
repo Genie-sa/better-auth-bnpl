@@ -185,3 +185,71 @@ describe("bounded provider retry policy", () => {
 		}
 	});
 });
+describe("mutation rejection classification", () => {
+	const rejectedOf = (err: unknown) => (isBnplProviderError(err) ? err.rejected : undefined);
+	it.each([400, 401, 403, 404, 422])(
+		"marks a POST answered with %s as rejected",
+		async (status) => {
+			const err = await callJson(async () => jsonResponse({ message: "refused" }, status), {
+				method: "POST",
+			}).catch((e) => e);
+			expect(rejectedOf(err)).toBe(true);
+		},
+	);
+	it.each([408, 409, 425, 429, 500, 503])(
+		"keeps a POST answered with %s uncertain",
+		async (status) => {
+			const err = await callJson(async () => jsonResponse({ message: "unknown" }, status), {
+				method: "POST",
+			}).catch((e) => e);
+			expect(rejectedOf(err)).toBe(false);
+		},
+	);
+	it("never marks a failed GET as a rejected mutation", async () => {
+		const err = await callJson(async () => jsonResponse({ message: "missing" }, 404)).catch(
+			(e) => e,
+		);
+		expect(rejectedOf(err)).toBe(false);
+	});
+	it("accepts a 409 only when the provider predicate proves the refusal", async () => {
+		const request = (isRejectedConflict?: (body: unknown) => boolean) =>
+			requestProviderJson({
+				provider: "tamara",
+				providerName: "Tamara",
+				baseUrl: "https://api.test",
+				fetchImpl: async () =>
+					jsonResponse({ errors: [{ error_code: "transition_not_allowed" }] }, 409),
+				method: "POST",
+				path: "/orders/ord-1/capture",
+				headers: {},
+				schema: okSchema,
+				label: "capture",
+				sleep: noopSleep,
+				isRejectedConflict,
+			}).catch((e) => e);
+		expect(rejectedOf(await request())).toBe(false);
+		expect(rejectedOf(await request(() => true))).toBe(true);
+	});
+	it("does not follow redirects for mutations, so a redirected read cannot look like a rejection", async () => {
+		let redirect: RequestRedirect | undefined;
+		const err = await callJson(
+			async (_url, init) => {
+				redirect = init?.redirect;
+				return new Response(null, { status: 303, headers: { location: "https://api.test/x" } });
+			},
+			{ method: "POST" },
+		).catch((e) => e);
+		expect(redirect).toBe("manual");
+		expect(rejectedOf(err)).toBe(false);
+	});
+	it("marks a request body that fails validation as rejected before dispatch", async () => {
+		const fetchImpl = vi.fn(async () => jsonResponse({ ok: true }));
+		const err = await callJson(fetchImpl, {
+			method: "POST",
+			body: { amount: "x" },
+			bodySchema: z.object({ amount: z.number() }),
+		}).catch((e) => e);
+		expect(fetchImpl).not.toHaveBeenCalled();
+		expect(rejectedOf(err)).toBe(true);
+	});
+});
