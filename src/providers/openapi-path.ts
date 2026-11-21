@@ -1,3 +1,4 @@
+import { BnplPluginError } from "../core/errors";
 type OpenApiPathKey<TPaths> = Extract<keyof TPaths, string>;
 type OpenApiPathParamValue = string | number | boolean;
 export type OpenApiPathParamNames<Path extends string> =
@@ -23,7 +24,7 @@ function renderOpenApiPath(path: string, params?: Record<string, OpenApiPathPara
 export function encodeProviderResourceId(value: OpenApiPathParamValue): string {
 	const id = String(value);
 	if (!id.trim() || id === "." || id === "..") {
-		throw new Error("bnpl: provider resource ID must be nonempty and cannot be a dot segment");
+		throw new BnplPluginError("INVALID_RESOURCE_ID", undefined, undefined, { rejected: true });
 	}
 	return encodeURIComponent(id);
 }

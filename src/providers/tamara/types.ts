@@ -54,7 +54,7 @@ export interface TamaraSimplifiedRefundResponse {
 export interface TamaraCancelResponse {
 	order_id: string;
 	cancel_id: string;
-	status: "updated" | "canceled";
+	status: "updated" | "canceled" | (string & {});
 	canceled_amount: TamaraMoney;
 	[k: string]: unknown;
 }

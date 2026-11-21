@@ -1,4 +1,6 @@
 import type { z } from "zod";
+import { BnplProviderError } from "../../core/errors";
+import { isRecord } from "../../core/guards";
 import type { ProviderFetch } from "../../core/provider";
 import { type ProviderHttpMethod, type SleepFn, requestProviderJson } from "../http";
 import { createOpenApiPathBuilder, encodeProviderResourceId } from "../openapi-path";
@@ -111,6 +113,7 @@ export class TamaraClient {
 			label,
 			timeoutMs: this.timeoutMs,
 			sleep: this.sleep,
+			isRejectedConflict: isTransitionNotAllowed,
 		});
 	}
 	async createCheckout(body: TamaraCheckoutRequest): Promise<TamaraCheckoutResponse> {
@@ -184,7 +187,13 @@ export class TamaraClient {
 		checkoutId: string,
 		query: TamaraVoidQuery,
 	): Promise<TamaraVoidResponse> {
-		const validatedQuery = tamaraVoidQuerySchema.parse(query);
+		const parsedQuery = tamaraVoidQuerySchema.safeParse(query);
+		if (!parsedQuery.success)
+			throw new BnplProviderError("tamara", "Tamara void query failed validation", {
+				cause: parsedQuery.error,
+				rejected: true,
+			});
+		const validatedQuery = parsedQuery.data;
 		const search = new URLSearchParams({ order_id: validatedQuery.order_id });
 		if (validatedQuery.store_code) search.set("store_code", validatedQuery.store_code);
 		const path = tamaraPath("/checkout/{checkout_id}/void", { checkout_id: checkoutId });
@@ -261,4 +270,11 @@ export class TamaraClient {
 			label: "updateReferenceId",
 		});
 	}
+}
+function isTransitionNotAllowed(body: unknown): boolean {
+	return (
+		isRecord(body) &&
+		Array.isArray(body.errors) &&
+		body.errors.some((error) => isRecord(error) && error.error_code === "transition_not_allowed")
+	);
 }

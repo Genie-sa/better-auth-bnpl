@@ -1,7 +1,7 @@
 import type { GenericEndpointContext, User } from "better-auth";
 import { APIError, createAuthEndpoint, getSessionFromCtx } from "better-auth/api";
 import { z } from "zod";
-import { BNPL_ERROR_CODES, BnplProviderError } from "../core/errors";
+import { BNPL_ERROR_CODES, BnplProviderError, isDefinitiveRejection } from "../core/errors";
 import { parseAmount } from "../core/money";
 import type { BnplProvider } from "../core/provider";
 import type {
@@ -16,6 +16,7 @@ import type {
 import { type AbsoluteUrl, absoluteUrlMax1024Schema, isAbsoluteUrl } from "../core/url";
 import type { BnplOptions } from "../plugin-types";
 import {
+	discardRejectedCheckoutReservation,
 	releaseCheckoutClaim,
 	reserveCheckoutOrder,
 	updateCheckoutAttempt,
@@ -413,12 +414,22 @@ async function createProviderCheckout(
 	provider: BnplProvider,
 	canonicalRequest: BnplCheckoutInput,
 	ctx: GenericEndpointContext,
+	discardReservation?: () => Promise<void>,
 ): Promise<Awaited<ReturnType<BnplProvider["createCheckout"]>>> {
 	try {
 		return await provider.createCheckout(canonicalRequest, { logger: ctx.context.logger });
 	} catch (e) {
 		if (e instanceof Error) {
 			ctx.context.logger.error(`bnpl: ${provider.id} checkout creation failed: ${e.message}`);
+		}
+		if (discardReservation && isDefinitiveRejection(e)) {
+			try {
+				await discardReservation();
+			} catch (discardError) {
+				ctx.context.logger.error(
+					`bnpl: failed to discard rejected checkout reservation: ${discardError instanceof Error ? discardError.message : discardError}`,
+				);
+			}
 		}
 		if (e instanceof BnplProviderError) {
 			throw new APIError("BAD_GATEWAY", {
@@ -531,7 +542,14 @@ export const checkout = (checkoutOptions: CheckoutSubpluginOptions = {}) => {
 					: undefined;
 				const result = reservation?.attempt.result
 					? { ...reservation.attempt.result, raw: undefined }
-					: await createProviderCheckout(provider, canonicalRequest, ctx);
+					: await createProviderCheckout(
+							provider,
+							canonicalRequest,
+							ctx,
+							reservation?.reserved
+								? () => discardRejectedCheckoutReservation(ctx, reservation.row, hash)
+								: undefined,
+						);
 				if (reservation?.reserved) {
 					const { raw: _raw, ...savedResult } = result;
 					await updateCheckoutAttempt(

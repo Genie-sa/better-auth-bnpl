@@ -9,39 +9,29 @@ info:
     Tabby Documentation:  **[docs.tabby.ai](https://docs.tabby.ai/)**
 servers:
   - url: https://api.tabby.ai/
-    description: Production (UAE, Kuwait)
+    description: Production (UAE)
   - url: https://api.tabby.sa/
     description: Production (KSA)
 tags:
   - name: Checkout
-    description: >-
-      Checkout is a whole process of customer data collection and payment
-      authorization.
+    description: Checkout is a whole process of customer data collection and payment authorization.
   - name: Payments
-    description: >-
-      The core of tabby is a payments flow enabling you to handle payments at
-      your webstore.
+    description: The core of tabby is a payments flow enabling you to handle payments at your webstore.
   - name: Webhooks
     description: Manage webhook endpoints.
+  - name: Dispute webhooks
+    description: Manage dispute webhook endpoints. Live secret key and `X-Merchant-Code` on every request; disputes have no test mode.
   - name: Disputes
-    description: >-
-      The Disputes API is designed to simplify the process of handling disputes
-      and help merchants resolve issues with customer orders more efficiently.
-      Merchants can use this API to retrieve a list of disputes, view details
-      about a specific dispute, and approve or challenge a bunch of disputes. It
-      mirrors the functionality available in Tabby Merchant Dashboard and
-      operates exclusively with live payments using live credentials. A secret
-      key is required for using the Disputes API. <SchemaDefinition
-      schemaRef="#/components/schemas/Webhook" />
+    description:
+      The Disputes API is designed to simplify the process of handling disputes and help merchants resolve issues with customer orders more efficiently. Merchants can use this API to retrieve a list of disputes, view details about a specific dispute, and approve or challenge a bunch of disputes. It mirrors the functionality available in Tabby Merchant Dashboard and operates exclusively with live payments using live credentials. A secret key is required for using the Disputes API.
+      <SchemaDefinition schemaRef="#/components/schemas/Webhook" />
 paths:
   /api/v2/checkout:
     post:
       tags:
         - Checkout
       summary: Create a session
-      description: >-
-        Creates a Checkout session. Creates Session and Payment, returns
-        Pre-Scoring result (status), ids of Payment and Session.
+      description: Creates a Checkout session. Creates Session and Payment, returns Pre-Scoring result (status), ids of Payment and Session.
       operationId: postCheckoutSession
       security:
         - bearerAuth:
@@ -54,107 +44,96 @@ paths:
               type: object
               properties:
                 payment:
-                  $ref: '#/components/schemas/CheckoutCreation'
+                  $ref: "#/components/schemas/CheckoutCreation"
                 lang:
-                  $ref: '#/components/schemas/LanguageCode'
+                  $ref: "#/components/schemas/LanguageCode"
                 merchant_code:
                   type: string
                   example: code provided to you from Tabby side
-                  description: >-
-                    Please contact your integration manager to get the merchant
-                    code.
+                  description: Please contact your integration manager to get the merchant code.
                 merchant_urls:
-                  $ref: '#/components/schemas/MerchantUrls'
+                  $ref: "#/components/schemas/MerchantUrls"
                 token:
                   type: string
                   default: null
-                  description: >
-                    If you already have `token`, you can pass it there.
-                    Authorization header still requires Secret Key.
+                  description: |
+                    If you already have `token`, you can pass it there. Authorization header still requires Secret Key.
               required:
                 - payment
                 - lang
                 - merchant_code
       responses:
-        '200':
-          $ref: '#/components/responses/CheckoutSession'
-        '400':
-          $ref: '#/components/responses/BadRequestError_CheckoutPost'
-        '401':
-          $ref: '#/components/responses/AuthenticationError_CheckoutPost'
-        '403':
-          $ref: '#/components/responses/ForbiddenError'
-        '404':
-          $ref: '#/components/responses/NotFoundError'
-        '500':
-          $ref: '#/components/responses/UnexpectedError'
+        "200":
+          $ref: "#/components/responses/CheckoutSession"
+        "400":
+          $ref: "#/components/responses/BadRequestError_CheckoutPost"
+        "401":
+          $ref: "#/components/responses/AuthenticationError_CheckoutPost"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/UnexpectedError"
   /api/v2/checkout/{id}:
     get:
       tags:
         - Checkout
       summary: Retrieve an existing checkout session
-      description: >-
-        Use this API to retrieve the token (only if tokens used in your
-        integration )
+      description: Use this API to retrieve the token (only if tokens used in your integration )
       operationId: getCheckoutSession
       security:
         - bearerAuth:
             - secret_key
       parameters:
-        - $ref: '#/components/parameters/sessionIdParam'
+        - $ref: "#/components/parameters/sessionIdParam"
       responses:
-        '200':
-          $ref: '#/components/responses/CheckoutSession'
-        '400':
-          $ref: '#/components/responses/BadRequestError'
-        '401':
-          $ref: '#/components/responses/AuthenticationError_key_doesnt_exist'
-        '403':
-          $ref: '#/components/responses/ForbiddenError'
-        '404':
-          $ref: '#/components/responses/NotFoundError'
-        '500':
-          $ref: '#/components/responses/UnexpectedError'
+        "200":
+          $ref: "#/components/responses/CheckoutSession"
+        "400":
+          $ref: "#/components/responses/BadRequestError_invalid_session_id"
+        "401":
+          $ref: "#/components/responses/AuthenticationError_key_doesnt_exist"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError_no_session"
+        "500":
+          $ref: "#/components/responses/UnexpectedError"
   /api/v2/payments/{id}:
     get:
       tags:
         - Payments
       summary: Retrieve a payment
-      description: >-
-        Retrieves the specified payment. Returns the entire payment object,
-        including the payment Status, Captures and Refunds objects.
+      description: Retrieves the specified payment. Returns the entire payment object, including the payment Status, Captures and Refunds objects.
       operationId: getPayment
       security:
         - bearerAuth:
             - secret_key
       parameters:
-        - $ref: '#/components/parameters/paymentIdParam'
+        - $ref: "#/components/parameters/paymentIdParam"
       responses:
-        '200':
-          $ref: '#/components/responses/PaymentResponse'
-        '400':
-          $ref: '#/components/responses/BadRequestError_PaymentsGet'
-        '401':
-          $ref: '#/components/responses/AuthenticationError_PaymentsGet'
-        '404':
-          $ref: '#/components/responses/NotFoundError_no_such_payment'
-        '500':
-          $ref: '#/components/responses/UnexpectedError'
+        "200":
+          $ref: "#/components/responses/PaymentResponse"
+        "400":
+          $ref: "#/components/responses/BadRequestError_PaymentsGet"
+        "401":
+          $ref: "#/components/responses/AuthenticationError_PaymentsGet"
+        "404":
+          $ref: "#/components/responses/NotFoundError_no_such_payment"
+        "500":
+          $ref: "#/components/responses/UnexpectedError"
     put:
       tags:
         - Payments
       summary: Update a payment
-      description: >-
-        Updates the reference_id. You can only use this endpoint to update this
-        1 field. If you send other fields in the request, they will simply be
-        ignored by tabby. The payment to be updated can have a status of
-        AUTHORIZED or CLOSED.
+      description: Updates the reference_id. You can only use this endpoint to update this 1 field. If you send other fields in the request, they will simply be ignored by tabby. The payment to be updated can have a status of AUTHORIZED or CLOSED.
       operationId: putPayment
       security:
         - bearerAuth:
             - secret_key
       parameters:
-        - $ref: '#/components/parameters/paymentIdParam'
+        - $ref: "#/components/parameters/paymentIdParam"
       requestBody:
         required: true
         content:
@@ -170,134 +149,107 @@ paths:
                       description: Merchant-assigned order or cart ID.
                       example: 1001_updated
       responses:
-        '200':
-          $ref: '#/components/responses/PaymentUpdate'
-        '400':
-          $ref: '#/components/responses/BadRequestError_PaymentsGet'
-        '401':
-          $ref: '#/components/responses/AuthenticationError'
-        '403':
-          $ref: '#/components/responses/ForbiddenError'
-        '404':
-          $ref: '#/components/responses/NotFoundError_no_such_payment'
-        '500':
-          $ref: '#/components/responses/UnexpectedError'
+        "200":
+          $ref: "#/components/responses/PaymentUpdate"
+        "400":
+          $ref: "#/components/responses/BadRequestError_PaymentsGet"
+        "401":
+          $ref: "#/components/responses/AuthenticationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError_no_such_payment"
+        "500":
+          $ref: "#/components/responses/UnexpectedError"
   /api/v2/payments/{id}/captures:
     post:
       tags:
         - Payments
       summary: Capture a payment
-      description: >-
-        Send a Capture requests for Authorized payments only. If you capture the
-        full payment amount, the payment will be automatically closed with full
-        capture. If you capture partial amount, the payment will remain
-        Authorized until the rest of the amount is captured or Close request
-        sent.
+      description: Send a Capture requests for Authorized payments only. If you capture the full payment amount, the payment will be automatically closed with full capture. If you capture partial amount, the payment will remain Authorized until the rest of the amount is captured or Close request sent.
       operationId: postPaymentCapture
       security:
         - bearerAuth:
             - secret_key
       parameters:
-        - $ref: '#/components/parameters/paymentIdParam'
+        - $ref: "#/components/parameters/paymentIdParam"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CaptureRequest'
+              $ref: "#/components/schemas/CaptureRequest"
       responses:
-        '200':
-          $ref: '#/components/responses/PaymentCaptureResponse'
-        '400':
-          $ref: '#/components/responses/BadRequestError_PaymentsCapture'
-        '401':
-          $ref: '#/components/responses/AuthenticationError'
-        '403':
-          $ref: '#/components/responses/ForbiddenError'
-        '404':
-          $ref: '#/components/responses/NotFoundError_no_such_payment'
-        '500':
-          $ref: '#/components/responses/UnexpectedError'
+        "200":
+          $ref: "#/components/responses/PaymentCaptureResponse"
+        "400":
+          $ref: "#/components/responses/BadRequestError_PaymentsCapture"
+        "401":
+          $ref: "#/components/responses/AuthenticationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError_no_such_payment"
+        "409":
+          $ref: "#/components/responses/ConflictError_locked"
+        "500":
+          $ref: "#/components/responses/UnexpectedError"
   /api/v2/payments/{id}/refunds:
     post:
       tags:
         - Payments
       summary: Refund a payment
-      description: >-
-        Send a full or partial refund amount request. You can only refund the
-        payment that has Closed status. By default refunds reflect instantly,
-        which means Tabby initiates a refund through payment gateway.
+      description: Send a full or partial refund amount request. You can only refund the payment that has Closed status. By default refunds reflect instantly, which means Tabby initiates a refund through payment gateway.
       operationId: postPaymentRefund
       security:
         - bearerAuth:
             - secret_key
       parameters:
-        - $ref: '#/components/parameters/paymentIdParam'
+        - $ref: "#/components/parameters/paymentIdParam"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/RefundRequest'
+              $ref: "#/components/schemas/RefundRequest"
       responses:
-        '200':
-          $ref: '#/components/responses/PaymentRefundResponse'
-        '400':
-          $ref: '#/components/responses/BadRequestError_PaymentsRefund'
-        '401':
-          $ref: '#/components/responses/AuthenticationError'
-        '403':
-          $ref: '#/components/responses/ForbiddenError'
-        '404':
-          $ref: '#/components/responses/NotFoundError_no_such_payment'
-        '409':
-          $ref: '#/components/responses/PaymentRefundError'
-        '500':
-          $ref: '#/components/responses/UnexpectedError'
+        "200":
+          $ref: "#/components/responses/PaymentRefundResponse"
+        "400":
+          $ref: "#/components/responses/BadRequestError_PaymentsRefund"
+        "401":
+          $ref: "#/components/responses/AuthenticationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError_no_such_payment"
+        "409":
+          $ref: "#/components/responses/PaymentRefundError"
+        "500":
+          $ref: "#/components/responses/UnexpectedError"
   /api/v2/payments/{id}/close:
     post:
       tags:
         - Payments
       summary: Close a payment
-      description: >-
-        Closed is the final status of the payment. Your payment is going to be
-        closed automatically if you capture the full amount of the payment. If
-        an order is fully cancelled, please close the payment without capturing
-        it - the customer will be refunded for all paid amount. If only a part
-        of the order is delivered, please capture this part and close the
-        payment – it will mean that another part of the order is not going to be
-        delivered to the customer.
+      description: Closed is the final status of the payment. Your payment is going to be closed automatically if you capture the full amount of the payment. If an order is fully cancelled, please close the payment without capturing it - the customer will be refunded for all paid amount. If only a part of the order is delivered, please capture this part and close the payment – it will mean that another part of the order is not going to be delivered to the customer.
       operationId: closePayment
       security:
         - bearerAuth:
             - secret_key
       parameters:
-        - $ref: '#/components/parameters/paymentIdParam'
+        - $ref: "#/components/parameters/paymentIdParam"
       responses:
-        '200':
-          $ref: '#/components/responses/PaymentClose'
-        '400':
-          $ref: '#/components/responses/BadRequestError_PaymentsClose'
-        '401':
-          $ref: '#/components/responses/AuthenticationError'
-        '403':
-          $ref: '#/components/responses/ForbiddenError'
-        '404':
-          $ref: '#/components/responses/NotFoundError_no_such_payment'
-        '500':
-          $ref: '#/components/responses/UnexpectedError'
+        "200":
+          $ref: "#/components/responses/PaymentClose"
+        "400":
+          $ref: "#/components/responses/BadRequestError_PaymentsClose"
+        "401":
+          $ref: "#/components/responses/AuthenticationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError_no_such_payment"
+        "500":
+          $ref: "#/components/responses/UnexpectedError"
   /api/v2/payments:
     get:
       tags:
         - Payments
       summary: List of all payments
-      description: >-
-        Returns a list of success payments (`AUTHORIZED` or `CLOSED`) you’ve
-        previously created. The payments are returned in sorted order, with the
-        most recent payments appearing first. Each entry in the array is a
-        separate payments object, including the status, any captures and any
-        refunds. If no more payments are available, the resulting array will be
-        empty. Payments might be filtered by creation date.
+      description: Returns a list of success payments (`AUTHORIZED` or `CLOSED`) you’ve previously created. The payments are returned in sorted order, with the most recent payments appearing first. Each entry in the array is a separate payments object, including the status, any captures and any refunds. If no more payments are available, the resulting array will be empty. Payments might be filtered by creation date.
       operationId: getPayments
       security:
         - bearerAuth:
@@ -308,23 +260,13 @@ paths:
           schema:
             type: string
             format: date
-          description: >-
-            This is a filter for the payment creation date, use it to get the
-            list of payments where creation date >= created_at__gte. ISO 8601
-            date time format (greater than or equal to). No time should be
-            provided, it starts at 00:00:00 be default. For example 2020-01-23
-            -> 2020-01-23T00:00:00Z.
+          description: This is a filter for the payment creation date, use it to get the list of payments where creation date >= created_at__gte. ISO 8601 date time format (greater than or equal to). No time should be provided, it starts at 00:00:00 be default. For example 2020-01-23 -> 2020-01-23T00:00:00Z.
         - in: query
           name: created_at__lte
           schema:
             type: string
             format: date-time
-          description: >-
-            This is a filter for the payment creation date, use it to get the
-            list of payments where creation date <= created_at__lte. ISO 8601
-            date time format (less than or equal to). No time should be
-            provided, it starts at 00:00:00 be default. For example 2020-01-23
-            -> 2020-01-23T00:00:00Z.
+          description: This is a filter for the payment creation date, use it to get the list of payments where creation date <= created_at__lte. ISO 8601 date time format (less than or equal to). No time should be provided, it starts at 00:00:00 be default. For example 2020-01-23 -> 2020-01-23T00:00:00Z.
         - in: query
           name: limit
           schema:
@@ -344,7 +286,7 @@ paths:
               - refunded
               - cancelled
             example: authorized
-          description: |
+          description: >
             Filter the orders by specific statuses:
               - `authorized`, `closed` and `rejected` belong to the API payment statuses;
               - `new`, `captured`, `refunded` and `cancelled`` refer to the statuses on Tabby Merchant Dashboard;
@@ -353,60 +295,50 @@ paths:
           name: offset
           schema:
             type: integer
-          description: >-
-            The number of records into a dataset that you want to start, indexed
-            at 0.
+          description: The number of records into a dataset that you want to start, indexed at 0.
       responses:
-        '200':
-          $ref: '#/components/responses/Payments'
-        '400':
-          $ref: '#/components/responses/BadRequestError_failed'
-        '401':
-          $ref: '#/components/responses/AuthenticationError'
-        '500':
-          $ref: '#/components/responses/UnexpectedError'
+        "200":
+          $ref: "#/components/responses/Payments"
+        "400":
+          $ref: "#/components/responses/BadRequestError_failed"
+        "401":
+          $ref: "#/components/responses/AuthenticationError"
+        "500":
+          $ref: "#/components/responses/UnexpectedError"
   /api/v1/webhooks:
     post:
       tags:
         - Webhooks
       summary: Register a webhook
-      description: >
-        Creates a new webhook. Webhooks are registered per `merchant_code` and
-        per environment:
-
-        the environment is determined by the secret key you authorize the
-        request with —
-
-        a production key (`sk_...`) registers webhooks for production payments,
-        a test key
-
-        (`sk_test_...`) registers webhooks for test payments. Each
-        `merchant_code` + key pair
-
+      description: |
+        Creates a new webhook. Webhooks are registered per `merchant_code` and per environment:
+        the environment is determined by the secret key you authorize the request with —
+        a production key (`sk_...`) registers webhooks for production payments, a test key
+        (`sk_test_...`) registers webhooks for test payments. Each `merchant_code` + key pair
         can have up to 4 webhooks.
       operationId: postWebhook
       security:
         - bearerAuth:
             - secret_key
       parameters:
-        - $ref: '#/components/parameters/merchantCodeParam'
+        - $ref: "#/components/parameters/merchantCodeParam"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/WebhookRegistration'
+              $ref: "#/components/schemas/WebhookRegistration"
       responses:
-        '200':
-          $ref: '#/components/responses/WebhookRegistration'
-        '400':
-          $ref: '#/components/responses/BadRequestError_bad_request'
-        '401':
-          $ref: '#/components/responses/AuthenticationError_authorization'
-        '404':
-          $ref: '#/components/responses/NotFoundError'
-        '500':
-          $ref: '#/components/responses/UnexpectedError'
+        "200":
+          $ref: "#/components/responses/WebhookRegistration"
+        "400":
+          $ref: "#/components/responses/BadRequestError_bad_request"
+        "401":
+          $ref: "#/components/responses/AuthenticationError_authorization"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/UnexpectedError"
     get:
       tags:
         - Webhooks
@@ -417,16 +349,16 @@ paths:
         - bearerAuth:
             - secret_key
       parameters:
-        - $ref: '#/components/parameters/merchantCodeParam'
+        - $ref: "#/components/parameters/merchantCodeParam"
       responses:
-        '200':
-          $ref: '#/components/responses/WebhookAll'
-        '401':
-          $ref: '#/components/responses/AuthenticationError_authorization'
-        '404':
-          $ref: '#/components/responses/NotFoundError'
-        '500':
-          $ref: '#/components/responses/UnexpectedError'
+        "200":
+          $ref: "#/components/responses/WebhookAll"
+        "401":
+          $ref: "#/components/responses/AuthenticationError_authorization"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/UnexpectedError"
   /api/v1/webhooks/{id}:
     get:
       tags:
@@ -438,17 +370,17 @@ paths:
         - bearerAuth:
             - secret_key
       parameters:
-        - $ref: '#/components/parameters/webhookIdParam'
-        - $ref: '#/components/parameters/merchantCodeParam'
+        - $ref: "#/components/parameters/webhookIdParam"
+        - $ref: "#/components/parameters/merchantCodeParam"
       responses:
-        '200':
-          $ref: '#/components/responses/Webhook'
-        '401':
-          $ref: '#/components/responses/AuthenticationError_invalid_secret_key'
-        '404':
-          $ref: '#/components/responses/NotFoundError_no_such_webhook'
-        '500':
-          $ref: '#/components/responses/UnexpectedError'
+        "200":
+          $ref: "#/components/responses/Webhook"
+        "401":
+          $ref: "#/components/responses/AuthenticationError_invalid_secret_key"
+        "404":
+          $ref: "#/components/responses/NotFoundError_no_such_webhook"
+        "500":
+          $ref: "#/components/responses/UnexpectedError"
     put:
       tags:
         - Webhooks
@@ -459,27 +391,25 @@ paths:
         - bearerAuth:
             - secret_key
       parameters:
-        - $ref: '#/components/parameters/webhookIdParam'
-        - $ref: '#/components/parameters/merchantCodeParam'
+        - $ref: "#/components/parameters/webhookIdParam"
+        - $ref: "#/components/parameters/merchantCodeParam"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/WebhookUpdate'
+              $ref: "#/components/schemas/WebhookUpdate"
       responses:
-        '200':
-          $ref: '#/components/responses/WebhookUpdate'
-        '400':
-          $ref: '#/components/responses/BadRequestError_bad_request'
-        '401':
-          $ref: '#/components/responses/AuthenticationError_authorization'
-        '403':
-          $ref: '#/components/responses/ForbiddenError'
-        '404':
-          $ref: '#/components/responses/NotFoundError_no_such_webhook'
-        '500':
-          $ref: '#/components/responses/UnexpectedError'
+        "200":
+          $ref: "#/components/responses/WebhookUpdate"
+        "400":
+          $ref: "#/components/responses/BadRequestError_bad_request"
+        "401":
+          $ref: "#/components/responses/AuthenticationError_authorization"
+        "404":
+          $ref: "#/components/responses/NotFoundError_no_such_webhook"
+        "500":
+          $ref: "#/components/responses/UnexpectedError"
     delete:
       tags:
         - Webhooks
@@ -490,17 +420,162 @@ paths:
         - bearerAuth:
             - secret_key
       parameters:
-        - $ref: '#/components/parameters/webhookIdParam'
-        - $ref: '#/components/parameters/merchantCodeParam'
+        - $ref: "#/components/parameters/webhookIdParam"
+        - $ref: "#/components/parameters/merchantCodeParam"
       responses:
-        '200':
-          $ref: '#/components/responses/WebhookDelete'
-        '401':
-          $ref: '#/components/responses/AuthenticationError_invalid_secret_key'
-        '404':
-          $ref: '#/components/responses/NotFoundError_no_such_webhook'
-        '500':
-          $ref: '#/components/responses/UnexpectedError'
+        "200":
+          $ref: "#/components/responses/WebhookDelete"
+        "401":
+          $ref: "#/components/responses/AuthenticationError_invalid_secret_key"
+        "404":
+          $ref: "#/components/responses/NotFoundError_no_such_webhook"
+        "500":
+          $ref: "#/components/responses/UnexpectedError"
+  /api/v1/dispute-webhooks:
+    post:
+      tags:
+        - Dispute webhooks
+      summary: Register a dispute webhook
+      description: |
+        Registers a dispute webhook for the merchant identified by the secret key and the
+        `X-Merchant-Code` header. Disputes have no test mode: authorize with a production
+        secret key (`sk_...`) — a request signed with a test key (`sk_test_...`) is rejected
+        with `403`. Each `merchant_code` can have up to 4 dispute webhooks; the limit is
+        separate from payment webhooks. The `url` is normalised before it is stored
+        (lower-case scheme and host, default port and trailing slash removed) and must be
+        unique per merchant. `header.value` is a secret: it is accepted in full and returned
+        masked in every response, including this one — `****` followed by the last 4 characters
+        for values longer than 8 characters, `****` alone for shorter values.
+      operationId: postDisputeWebhook
+      security:
+        - bearerAuth:
+            - secret_key
+      parameters:
+        - $ref: "#/components/parameters/disputeMerchantCodeParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DisputeWebhookRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/DisputeWebhook"
+        "400":
+          $ref: "#/components/responses/BadRequestError_bad_request"
+        "401":
+          $ref: "#/components/responses/AuthenticationError_invalid_secret_key"
+        "403":
+          $ref: "#/components/responses/ForbiddenError_no_test_mode"
+        "500":
+          $ref: "#/components/responses/UnexpectedError_internal"
+    get:
+      tags:
+        - Dispute webhooks
+      summary: Retrieve all dispute webhooks
+      description: Retrieves all dispute webhooks registered for the merchant. Returns an empty array when none are registered.
+      operationId: getDisputeWebhooks
+      security:
+        - bearerAuth:
+            - secret_key
+      parameters:
+        - $ref: "#/components/parameters/disputeMerchantCodeParam"
+      responses:
+        "200":
+          $ref: "#/components/responses/DisputeWebhookAll"
+        "400":
+          $ref: "#/components/responses/BadRequestError_bad_request"
+        "401":
+          $ref: "#/components/responses/AuthenticationError_invalid_secret_key"
+        "403":
+          $ref: "#/components/responses/ForbiddenError_no_test_mode"
+        "500":
+          $ref: "#/components/responses/UnexpectedError_internal"
+  /api/v1/dispute-webhooks/{id}:
+    get:
+      tags:
+        - Dispute webhooks
+      summary: Retrieve a dispute webhook
+      description: Retrieves the specified dispute webhook. `header.value` is returned masked.
+      operationId: getDisputeWebhook
+      security:
+        - bearerAuth:
+            - secret_key
+      parameters:
+        - $ref: "#/components/parameters/webhookIdParam"
+        - $ref: "#/components/parameters/disputeMerchantCodeParam"
+      responses:
+        "200":
+          $ref: "#/components/responses/DisputeWebhook"
+        "400":
+          $ref: "#/components/responses/BadRequestError_bad_request"
+        "401":
+          $ref: "#/components/responses/AuthenticationError_invalid_secret_key"
+        "403":
+          $ref: "#/components/responses/ForbiddenError_no_test_mode"
+        "404":
+          $ref: "#/components/responses/NotFoundError_webhook_not_found"
+        "500":
+          $ref: "#/components/responses/UnexpectedError_internal"
+    put:
+      tags:
+        - Dispute webhooks
+      summary: Update a dispute webhook
+      description: |
+        Updates the specified dispute webhook. The request **replaces the whole object**:
+        send both `url` and `header`; omitting `header` removes it. The same URL rules
+        as on registration apply (normalised, unique per merchant).
+      operationId: putDisputeWebhook
+      security:
+        - bearerAuth:
+            - secret_key
+      parameters:
+        - $ref: "#/components/parameters/webhookIdParam"
+        - $ref: "#/components/parameters/disputeMerchantCodeParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DisputeWebhookRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/DisputeWebhook"
+        "400":
+          $ref: "#/components/responses/BadRequestError_bad_request"
+        "401":
+          $ref: "#/components/responses/AuthenticationError_invalid_secret_key"
+        "403":
+          $ref: "#/components/responses/ForbiddenError_no_test_mode"
+        "404":
+          $ref: "#/components/responses/NotFoundError_webhook_not_found"
+        "500":
+          $ref: "#/components/responses/UnexpectedError_internal"
+    delete:
+      tags:
+        - Dispute webhooks
+      summary: Remove a dispute webhook
+      description: Removes the specified dispute webhook.
+      operationId: deleteDisputeWebhook
+      security:
+        - bearerAuth:
+            - secret_key
+      parameters:
+        - $ref: "#/components/parameters/webhookIdParam"
+        - $ref: "#/components/parameters/disputeMerchantCodeParam"
+      responses:
+        "200":
+          $ref: "#/components/responses/WebhookDelete"
+        "400":
+          $ref: "#/components/responses/BadRequestError_bad_request"
+        "401":
+          $ref: "#/components/responses/AuthenticationError_invalid_secret_key"
+        "403":
+          $ref: "#/components/responses/ForbiddenError_no_test_mode"
+        "404":
+          $ref: "#/components/responses/NotFoundError_webhook_not_found"
+        "500":
+          $ref: "#/components/responses/UnexpectedError_internal"
   /api/v1/disputes:
     get:
       tags:
@@ -545,22 +620,18 @@ paths:
           name: page_token
           schema:
             type: string
-          description: >-
-            To load the next page of disputed items provide page token. This
-            code can be obtained from the `next_page_token` variable in the
-            response of dispute list. If `next_page_token` is empty in response,
-            it means last page of disputes has been reached.
+          description: To load the next page of disputed items provide page token. This code can be obtained from the `next_page_token` variable in the response of dispute list. If `next_page_token` is empty in response, it means last page of disputes has been reached.
       responses:
-        '200':
-          $ref: '#/components/responses/Disputes'
-        '400':
-          $ref: '#/components/responses/BadRequestError_bad_request'
-        '401':
-          $ref: '#/components/responses/AuthenticationError_invalid_secret_key'
-        '404':
-          $ref: '#/components/responses/NotFoundError'
-        '500':
-          $ref: '#/components/responses/UnexpectedError'
+        "200":
+          $ref: "#/components/responses/Disputes"
+        "400":
+          $ref: "#/components/responses/BadRequestError_bad_request"
+        "401":
+          $ref: "#/components/responses/AuthenticationError_invalid_secret_key"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/UnexpectedError"
   /api/v1/disputes/{disputeId}:
     get:
       tags:
@@ -572,32 +643,30 @@ paths:
         - bearerAuth:
             - secret_key
       parameters:
-        - $ref: '#/components/parameters/disputeIdParam'
+        - $ref: "#/components/parameters/disputeIdParam"
       responses:
-        '200':
-          $ref: '#/components/responses/Dispute'
-        '400':
-          $ref: '#/components/responses/BadRequestError_bad_request'
-        '401':
-          $ref: '#/components/responses/AuthenticationError_invalid_secret_key'
-        '404':
-          $ref: '#/components/responses/NotFoundError_Disputes'
-        '500':
-          $ref: '#/components/responses/UnexpectedError'
+        "200":
+          $ref: "#/components/responses/Dispute"
+        "400":
+          $ref: "#/components/responses/BadRequestError_bad_request"
+        "401":
+          $ref: "#/components/responses/AuthenticationError_invalid_secret_key"
+        "404":
+          $ref: "#/components/responses/NotFoundError_Disputes"
+        "500":
+          $ref: "#/components/responses/UnexpectedError"
   /api/v1/disputes/{disputeId}/provide-evidence:
     post:
       tags:
         - Disputes
       summary: Provide evidence for a dispute
-      description: >-
-        Provide evidence (text and/or attachments) for a dispute. Used by the
-        merchant to submit proof in response to an evidence request.
+      description: Provide evidence (text and/or attachments) for a dispute. Used by the merchant to submit proof in response to an evidence request.
       operationId: postDisputeProvideEvidence
       security:
         - bearerAuth:
             - secret_key
       parameters:
-        - $ref: '#/components/parameters/disputeIdParam'
+        - $ref: "#/components/parameters/disputeIdParam"
       requestBody:
         required: true
         content:
@@ -607,42 +676,36 @@ paths:
               properties:
                 content:
                   type: string
-                  example: >-
-                    I am providing a photo of the damaged product that was
-                    received
+                  example: I am providing a photo of the damaged product that was received
                   description: Text content of the evidence being provided.
                 attachment_ids:
                   type: array
                   items:
                     type: string
                     format: uuid
-                    example: attachment id, uuid format
-                  description: >-
-                    Array of attachment IDs to include as evidence. IDs can be
-                    received via `upload attachment` endpoint.
+                    example: "attachment id, uuid format"
+                  description: Array of attachment IDs to include as evidence. IDs can be received via `upload attachment` endpoint.
               required:
                 - content
       responses:
-        '200':
-          $ref: '#/components/responses/DisputeProvideEvidence'
-        '400':
-          $ref: '#/components/responses/BadRequestError_bad_request'
-        '401':
-          $ref: '#/components/responses/AuthenticationError_invalid_secret_key'
-        '404':
-          $ref: '#/components/responses/NotFoundError_Disputes'
-        '409':
-          $ref: '#/components/responses/DisputeProvideEvidenceConflict'
-        '500':
-          $ref: '#/components/responses/UnexpectedError'
+        "200":
+          $ref: "#/components/responses/DisputeProvideEvidence"
+        "400":
+          $ref: "#/components/responses/BadRequestError_bad_request"
+        "401":
+          $ref: "#/components/responses/AuthenticationError_invalid_secret_key"
+        "404":
+          $ref: "#/components/responses/NotFoundError_Disputes"
+        "409":
+          $ref: "#/components/responses/DisputeProvideEvidenceConflict"
+        "500":
+          $ref: "#/components/responses/UnexpectedError"
   /api/v1/disputes/approve:
     post:
       tags:
         - Disputes
       summary: Approve disputes
-      description: >-
-        Approve disputes (refund money to the customer). Only 20 disputes can be
-        approved within a single request.
+      description: Approve disputes (refund money to the customer). Only 20 disputes can be approved within a single request.
       operationId: postDisputesApprove
       security:
         - bearerAuth:
@@ -659,32 +722,27 @@ paths:
                   items:
                     type: string
                     format: uuid
-                    example: dispute id, uuid format
-                  description: >-
-                    Array of dispute ids. Only 20 disputes can be approved
-                    within a single request.
+                    example: "dispute id, uuid format"
+                  description: Array of dispute ids. Only 20 disputes can be approved within a single request.
               required:
                 - dispute_ids
       responses:
-        '200':
-          $ref: '#/components/responses/DisputesApprove'
-        '400':
-          $ref: '#/components/responses/BadRequestError_bad_request'
-        '401':
-          $ref: '#/components/responses/AuthenticationError_invalid_secret_key'
-        '404':
-          $ref: '#/components/responses/NotFoundError'
-        '500':
-          $ref: '#/components/responses/UnexpectedError'
+        "200":
+          $ref: "#/components/responses/DisputesApprove"
+        "400":
+          $ref: "#/components/responses/BadRequestError_bad_request"
+        "401":
+          $ref: "#/components/responses/AuthenticationError_invalid_secret_key"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/UnexpectedError"
   /api/v1/disputes/challenge:
     post:
       tags:
         - Disputes
       summary: Challenge disputes
-      description: >-
-        Challenge disputes (request Tabby support to take a look at the case).
-        Only 20 disputes can be challenged within a single request. Only
-        disputes with status 'new' might be challenged.
+      description: Challenge disputes (request Tabby support to take a look at the case). Only 20 disputes can be challenged within a single request. Only disputes with status 'new' might be challenged.
       operationId: postDisputesChallenge
       security:
         - bearerAuth:
@@ -722,43 +780,36 @@ paths:
                       - `merchant_reason_problem_with_delivery` - there was a problem with the order during delivery that needed to be adjusted and resolved.
                 amount:
                   type: string
-                  example: '100'
-                  description: >-
-                    If the dispute challenged with reason
-                    `merchant_reason_order_amount_should_be_different` - a new
-                    disputed amount is required.
+                  example: "100"
+                  description: If the dispute challenged with reason `merchant_reason_order_amount_should_be_different` - a new disputed amount is required.
                 attachment_ids:
                   type: array
                   items:
                     type: string
                     format: uuid
-                    example: attachment id, uuid format
-                  description: >-
-                    Attachment ID that will be attached. ID can be received via
-                    `upload attachment` endpoint.
+                    example: "attachment id, uuid format"
+                  description: Attachment ID that will be attached. ID can be received via `upload attachment` endpoint.
               required:
                 - dispute_id
                 - description
                 - reason
       responses:
-        '200':
-          $ref: '#/components/responses/DisputesChallenge'
-        '400':
-          $ref: '#/components/responses/BadRequestError_bad_request'
-        '401':
-          $ref: '#/components/responses/AuthenticationError_invalid_secret_key'
-        '404':
-          $ref: '#/components/responses/NotFoundError'
-        '500':
-          $ref: '#/components/responses/UnexpectedError'
+        "200":
+          $ref: "#/components/responses/DisputesChallenge"
+        "400":
+          $ref: "#/components/responses/BadRequestError_bad_request"
+        "401":
+          $ref: "#/components/responses/AuthenticationError_invalid_secret_key"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/UnexpectedError"
   /api/v1/disputes/attachments/upload:
     post:
       tags:
         - Disputes
       summary: Upload attachment
-      description: >-
-        Upload an attachment. Attachment must be in PNG, JPEG or PDF format and
-        can be up to 5 megabytes in size. Files larger than 5 MB are rejected.
+      description: Upload an attachment. Attachment must be in PNG, JPEG or PDF format and can be up to 5 megabytes in size. Files larger than 5 MB are rejected.
       operationId: postUploadAttachment
       security:
         - bearerAuth:
@@ -773,20 +824,18 @@ paths:
                 attachment:
                   type: string
                   format: binary
-                  description: >-
-                    Attachment must be in PNG, JPEG or PDF format and can be up
-                    to 5 megabytes in size. Files larger than 5 MB are rejected.
+                  description: Attachment must be in PNG, JPEG or PDF format and can be up to 5 megabytes in size. Files larger than 5 MB are rejected.
               required:
                 - attachment
       responses:
-        '200':
-          $ref: '#/components/responses/DisputeAttachmentUpload'
-        '400':
-          $ref: '#/components/responses/BadRequestError_bad_request'
-        '401':
-          $ref: '#/components/responses/AuthenticationError_invalid_secret_key'
-        '500':
-          $ref: '#/components/responses/UnexpectedError'
+        "200":
+          $ref: "#/components/responses/DisputeAttachmentUpload"
+        "400":
+          $ref: "#/components/responses/BadRequestError_bad_request"
+        "401":
+          $ref: "#/components/responses/AuthenticationError_invalid_secret_key"
+        "500":
+          $ref: "#/components/responses/UnexpectedError"
 components:
   parameters:
     paymentIdParam:
@@ -796,7 +845,7 @@ components:
       schema:
         type: string
         format: uuid
-        example: payment id, uuid format
+        example: "payment id, uuid format"
       description: ID of the payment.
     webhookIdParam:
       in: path
@@ -805,7 +854,7 @@ components:
       schema:
         type: string
         format: uuid
-        example: webhook id, uuid format
+        example: "webhook id, uuid format"
       description: ID of the webhook.
     refundIdParam:
       in: path
@@ -823,9 +872,15 @@ components:
       schema:
         type: string
         example: code provided to you from Tabby side
-      description: >-
-        Used for multi store/countries setup, please contact your Account
-        manager to recognize that
+      description: Used for multi store/countries setup, please contact your Account manager to recognize that
+    disputeMerchantCodeParam:
+      in: header
+      name: X-Merchant-Code
+      required: true
+      schema:
+        type: string
+        example: code provided to you from Tabby side
+      description: Merchant code the request is scoped to. Required on every dispute-webhook request, even when your secret key maps to a single merchant; case-insensitive.
     sessionIdParam:
       in: path
       name: id
@@ -833,7 +888,7 @@ components:
       schema:
         type: string
         format: uuid
-        example: session id, uuid format
+        example: "session id, uuid format"
       description: ID of the session.
     disputeIdParam:
       in: path
@@ -842,7 +897,7 @@ components:
       schema:
         type: string
         format: uuid
-        example: dispute id, uuid format
+        example: "dispute id, uuid format"
       description: ID of the dispute.
   responses:
     CheckoutSession:
@@ -850,7 +905,7 @@ components:
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/CheckoutSession'
+            $ref: "#/components/schemas/CheckoutSession"
     Dispute:
       description: Success. Returns dispute info.
       content:
@@ -859,7 +914,7 @@ components:
             type: object
             properties:
               dispute:
-                $ref: '#/components/schemas/Dispute'
+                $ref: "#/components/schemas/Dispute"
             required:
               - dispute
     DisputeAttachmentUpload:
@@ -872,22 +927,20 @@ components:
               id:
                 type: string
                 format: uuid
-                example: attachment id, uuid format
+                example: "attachment id, uuid format"
                 description: Unique ID of attachment
     DisputeProvideEvidence:
       description: Success. Evidence was submitted for the dispute.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Evidence'
+            $ref: "#/components/schemas/Evidence"
     DisputeProvideEvidenceConflict:
-      description: >-
-        Conflict. Evidence cannot be submitted for the dispute in its current
-        state.
+      description: Conflict. Evidence cannot be submitted for the dispute in its current state.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error_409'
+            $ref: "#/components/schemas/Error_409"
     Disputes:
       description: Success. Returns a list of disputes.
       content:
@@ -898,7 +951,7 @@ components:
               disputes:
                 type: array
                 items:
-                  $ref: '#/components/schemas/DisputeNoHistory'
+                  $ref: "#/components/schemas/DisputeNoHistory"
               next_page_token:
                 type: string
                 example: next_page_token
@@ -915,7 +968,7 @@ components:
               disputes:
                 type: array
                 items:
-                  $ref: '#/components/schemas/DisputeNoHistory'
+                  $ref: "#/components/schemas/DisputeNoHistory"
     DisputesChallenge:
       description: Success. Disputes were challenged.
       content:
@@ -926,43 +979,49 @@ components:
               disputes:
                 type: array
                 items:
-                  $ref: '#/components/schemas/DisputeNoHistory'
+                  $ref: "#/components/schemas/DisputeNoHistory"
     PaymentCaptureResponse:
       description: Success. Payment object is returned.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/PaymentCaptureResponse'
+            $ref: "#/components/schemas/PaymentCaptureResponse"
     PaymentClose:
       description: Success. Payment object is returned.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/PaymentClose'
+            $ref: "#/components/schemas/PaymentClose"
     PaymentRefundError:
       description: Refund is unavailable.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error_409'
+            $ref: "#/components/schemas/Error_409"
+    ConflictError_locked:
+      description: Conflict. Another concurrent request for this payment is being processed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error_409_locked"
     PaymentRefundResponse:
       description: Success. Payment object is returned.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/PaymentRefundResponse'
+            $ref: "#/components/schemas/PaymentRefundResponse"
     PaymentResponse:
       description: Success. Payment object is returned.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/PaymentResponse'
+            $ref: "#/components/schemas/PaymentResponse"
     PaymentUpdate:
       description: Success. Payment object is returned.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/PaymentUpdate'
+            $ref: "#/components/schemas/PaymentUpdate"
     Payments:
       description: Success. Returns a list of payments.
       content:
@@ -974,215 +1033,282 @@ components:
                 type: array
                 nullable: true
                 items:
-                  $ref: '#/components/schemas/PaymentResponse'
+                  $ref: "#/components/schemas/PaymentResponse"
               pagination:
-                $ref: '#/components/schemas/Pagination'
+                $ref: "#/components/schemas/Pagination"
     Webhook:
       description: Success. Webhook object is returned.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Webhook'
+            $ref: "#/components/schemas/Webhook"
     WebhookAll:
       description: Success. Webhook object is returned.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/WebhookResponseAll'
+            $ref: "#/components/schemas/WebhookResponseAll"
     WebhookDelete:
       description: Webhook was deleted successfully.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/WebhookDelete'
+            $ref: "#/components/schemas/WebhookDelete"
     WebhookRegistration:
       description: Success. Webhook object is returned.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/WebhookRegistrationResponse'
+            $ref: "#/components/schemas/WebhookRegistrationResponse"
     WebhookUpdate:
       description: Success. Webhook object is returned.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/WebhookUpdate'
+            $ref: "#/components/schemas/WebhookUpdate"
     AuthenticationError:
       description: The request cannot be authorized.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error_401'
+            $ref: "#/components/schemas/Error_401"
     AuthenticationError_authorization:
       description: The request cannot be authorized.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error_401_authorization'
+            $ref: "#/components/schemas/Error_401_authorization"
     AuthenticationError_CheckoutPost:
       description: The request cannot be authorized.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error_401_merchantNull'
+            $ref: "#/components/schemas/Error_401_merchantNull"
     AuthenticationError_invalid_secret_key:
       description: The request cannot be authorized.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error_401_invalid_secret_key'
+            $ref: "#/components/schemas/Error_401_invalid_secret_key"
     AuthenticationError_key_doesnt_exist:
       description: The request cannot be authorized.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error_401_key_doesnt_exist'
+            $ref: "#/components/schemas/Error_401_key_doesnt_exist"
     AuthenticationError_PaymentsGet:
       description: The request cannot be authorized.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error_401_missingBearer'
+            $ref: "#/components/schemas/Error_401_missingBearer"
     BadRequestError:
-      description: >-
-        One of the required fields is missing or request is not formatted
-        correctly.
+      description: One of the required fields is missing or request is not formatted correctly.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error_400'
+            $ref: "#/components/schemas/Error_400"
     BadRequestError_bad_request:
-      description: >-
-        One of the required fields is missing or request is not formatted
-        correctly.
+      description: One of the required fields is missing or request is not formatted correctly.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error_400_bad_request'
+            $ref: "#/components/schemas/Error_400_bad_request"
     BadRequestError_CheckoutPost:
-      description: >-
-        One of the required fields is missing or request is not formatted
-        correctly.
+      description: One of the required fields is missing or request is not formatted correctly.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error_400_CheckoutPost'
+            $ref: "#/components/schemas/Error_400_CheckoutPost"
     BadRequestError_failed:
-      description: >-
-        One of the required fields is missing or request is not formatted
-        correctly.
+      description: One of the required fields is missing or request is not formatted correctly.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error_400_failed'
+            $ref: "#/components/schemas/Error_400_failed"
     BadRequestError_PaymentsCapture:
-      description: >-
-        One of the required fields is missing or request is not formatted
-        correctly.
+      description: One of the required fields is missing or request is not formatted correctly.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error_400_PaymentsCapture'
+            $ref: "#/components/schemas/Error_400_PaymentsCapture"
     BadRequestError_PaymentsClose:
-      description: >-
-        One of the required fields is missing or request is not formatted
-        correctly.
+      description: One of the required fields is missing or request is not formatted correctly.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error_400_PaymentsClose'
+            $ref: "#/components/schemas/Error_400_PaymentsClose"
     BadRequestError_PaymentsGet:
-      description: >-
-        One of the required fields is missing or request is not formatted
-        correctly.
+      description: One of the required fields is missing or request is not formatted correctly.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error_400_PaymentsGet'
+            $ref: "#/components/schemas/Error_400_PaymentsGet"
     BadRequestError_PaymentsRefund:
-      description: >-
-        One of the required fields is missing or request is not formatted
-        correctly.
+      description: One of the required fields is missing or request is not formatted correctly.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error_400_PaymentsRefund'
+            $ref: "#/components/schemas/Error_400_PaymentsRefund"
     ForbiddenError:
       description: You tried to perform an action which is forbidden.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error_403'
+            $ref: "#/components/schemas/Error_403"
     NotFoundError:
       description: You are using an incorrect ID.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error_404'
+            $ref: "#/components/schemas/Error_404"
     NotFoundError_Disputes:
       description: You are using an incorrect ID.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error_404_dispute_not_found'
+            $ref: "#/components/schemas/Error_404_dispute_not_found"
+    NotFoundError_no_session:
+      description: No session with this ID exists for your merchant. A session that belongs to another merchant returns the same response.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error_404_no_session"
+    BadRequestError_invalid_session_id:
+      description: The session ID in the path is not a valid UUID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error_400_invalid_session_id"
     NotFoundError_no_such_payment:
       description: You are using an incorrect ID.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error_404_no_such_payment'
+            $ref: "#/components/schemas/Error_404_no_such_payment"
     NotFoundError_no_such_webhook:
       description: You are using an incorrect ID.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error_404_no_such_webhook'
+            $ref: "#/components/schemas/Error_404_no_such_webhook"
+    DisputeWebhook:
+      description: Success. Dispute webhook object is returned; `header.value` is masked.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/DisputeWebhook"
+    DisputeWebhookAll:
+      description: Success. Array of dispute webhooks; an empty array when none are registered.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/DisputeWebhookAll"
+    ForbiddenError_no_test_mode:
+      description: Disputes have no test mode — the request was authorized with a test secret key.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error_403_no_test_mode"
+    NotFoundError_webhook_not_found:
+      description: No dispute webhook with this ID exists for the merchant.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error_404_webhook_not_found"
     UnexpectedError:
       description: Something bad happened. We're notified.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error_500'
+            $ref: "#/components/schemas/Error_500"
+    UnexpectedError_internal:
+      description: Something bad happened. We're notified.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error_500_internal"
   schemas:
     Attachment_V1:
       type: object
       nullable: true
-      description: >-
-        Extra data (booking info, insurance, flight reservations, ...) as
-        serialized JSON
+      description: Extra data (booking info, insurance, flight reservations, ...) as serialized JSON
       properties:
         body:
-          description: >-
-            Should be an object containing any of the keys with corresponded sub
-            objects
-          example: >-
-            {"flight_reservation_details": {"pnr": "TR9088999","itinerary":
-            [...],"insurance": [...],"passengers": [...],"affiliate_name": "some
-            affiliate"}}
+          description: Should be an object containing any of the keys with corresponded sub objects
+          example: '{"flight_reservation_details": {"pnr": "TR9088999","itinerary": [...],"insurance": [...],"passengers": [...],"affiliate_name": "some affiliate"}}'
           properties:
             flight_reservation_details:
-              $ref: '#/components/schemas/FlightReservationDetails'
+              $ref: "#/components/schemas/FlightReservationDetails"
             hotel_reservation_details:
-              $ref: '#/components/schemas/HotelReservationDetails'
+              $ref: "#/components/schemas/HotelReservationDetails"
             insurance_details:
-              $ref: '#/components/schemas/InsuranceDetails'
+              $ref: "#/components/schemas/InsuranceDetails"
             payment_history_full:
-              $ref: '#/components/schemas/AttachmentPaymentHistoryFull'
+              $ref: "#/components/schemas/AttachmentPaymentHistoryFull"
             payment_history_simple:
-              $ref: '#/components/schemas/AttachmentPaymentHistorySimple'
+              $ref: "#/components/schemas/AttachmentPaymentHistorySimple"
             flight_points_simple:
-              $ref: '#/components/schemas/FlightPointsSimple'
+              $ref: "#/components/schemas/FlightPointsSimple"
             marketplaces:
-              $ref: '#/components/schemas/Marketplaces'
+              $ref: "#/components/schemas/Marketplaces"
             education_details:
-              $ref: '#/components/schemas/EducationDetails'
+              $ref: "#/components/schemas/EducationDetails"
         content_type:
           description: Version of used schema
           type: string
           default: application/vnd.tabby.v1+json
-      required:
-        - body
-        - content_type
+    CheckoutAttachment:
+      type: object
+      nullable: true
+      description: Extra data (booking info, insurance, flight reservations, ...) as serialized JSON
+      properties:
+        body:
+          description: Should be an object containing any of the keys with corresponded sub objects
+          example: '{"flight_reservation_details": {"pnr": "TR9088999","itinerary": [...],"insurance": [...],"passengers": [...],"affiliate_name": "some affiliate"}}'
+          properties:
+            flight_reservation_details:
+              $ref: "#/components/schemas/FlightReservationDetails"
+            hotel_reservation_details:
+              $ref: "#/components/schemas/HotelReservationDetails"
+            insurance_details:
+              $ref: "#/components/schemas/InsuranceDetails"
+            payment_history_full:
+              $ref: "#/components/schemas/AttachmentPaymentHistoryFull"
+            payment_history_simple:
+              $ref: "#/components/schemas/AttachmentPaymentHistorySimple"
+            flight_points_simple:
+              $ref: "#/components/schemas/FlightPointsSimple"
+            marketplaces:
+              $ref: "#/components/schemas/Marketplaces"
+              description: "Required for marketplaces and aggregators. In KSA, fill `seller_id`, `seller_phone` and `seller_commercial_registration_number`."
+              x-mint:
+                post:
+                  - required
+            education_details:
+              $ref: "#/components/schemas/EducationDetails"
+              description: Required for education merchants.
+              x-mint:
+                post:
+                  - required
+            latitude:
+              type: number
+              example: 24.4763
+              description: Required for POS terminals in KSA. Latitude of the terminal.
+              x-mint:
+                post:
+                  - required
+            longitude:
+              type: number
+              example: 54.3209
+              description: Required for POS terminals in KSA. Longitude of the terminal.
+              x-mint:
+                post:
+                  - required
+        content_type:
+          description: Version of used schema
+          type: string
+          default: application/vnd.tabby.v1+json
     AttachmentPaymentHistoryFull:
       type: object
       properties:
@@ -1267,9 +1393,6 @@ components:
               type: integer
               example: 9
               description: Months remaining until program completion / graduation.
-          required:
-            - payment_tenure_months
-            - months_to_completion
         student_history:
           type: object
           description: Student's payment history with the merchant.
@@ -1285,16 +1408,7 @@ components:
             observation_window_months:
               type: integer
               example: 12
-              description: >-
-                Window over which history was calculated, to distinguish a new
-                student's 0 late payments from a long-history clean student's 0.
-          required:
-            - late_payments_count
-            - avg_overdue_duration_days
-      required:
-        - merchant_subtype
-        - program
-        - student_history
+              description: Window over which history was calculated, to distinguish a new student's 0 late payments from a long-history clean student's 0.
     Buyer:
       description: Customer information
       type: object
@@ -1309,15 +1423,12 @@ components:
           description: Customer’s email address.
         phone:
           type: string
-          example: '500000001'
-          description: >-
-            Customer’s phone number. This must be a valid mobile phone where the
-            consumer can receive text messages. The accepted phone masks are -
-            `500000001`, `0500000001`, `+971500000001`, `971500000001`.
+          example: "500000001"
+          description: Customer’s phone number. This must be a valid mobile phone where the consumer can receive text messages. The accepted phone masks are - `500000001`, `0500000001`, `+971500000001`, `971500000001`.
         dob:
           type: string
           format: date
-          example: '2000-01-20'
+          example: !!str 2000-01-20
           description: Customer's date of birth; format is YYYY-MM-DD.
       required:
         - phone
@@ -1330,16 +1441,14 @@ components:
         registered_since:
           type: string
           format: date-time
-          description: >-
-            Date and time the customer / user / student got registred with your
-            store / portal, in UTC, and displayed in ISO 8601 datetime format.
+          description: Date and time the customer / user / student got registred with your store / portal, in UTC, and displayed in ISO 8601 datetime format.
         loyalty_level:
           type: number
           default: 0
-          description: >-
-            Customer / user / student loyalty level with you. Should be sent as
-            a number of successfully placed purchases from your store / portal
-            with any payment methods.
+          description: "**Recommended, not required.** Customer / user / student loyalty level with you. Should be sent as a number of successfully placed purchases from your store / portal with any payment methods."
+          x-mint:
+            post:
+              - recommended
         wishlist_count:
           type: number
           default: 0
@@ -1356,7 +1465,6 @@ components:
           description: Is email verified.
       required:
         - registered_since
-        - loyalty_level
     BuyerHistoryResponse:
       description: Customer / user / student information from previous purchases with you.
       type: object
@@ -1364,16 +1472,11 @@ components:
         registered_since:
           type: string
           format: date-time
-          description: >-
-            Date and time the customer / user / student got registred with your
-            store / portal, in UTC, and displayed in ISO 8601 datetime format.
+          description: Date and time the customer / user / student got registred with your store / portal, in UTC, and displayed in ISO 8601 datetime format.
         loyalty_level:
           type: number
           default: 0
-          description: >-
-            Customer / user / student loyalty level with you. Should be sent as
-            a number of successfully placed purchases from your store / portal
-            with any payment methods.
+          description: Customer / user / student loyalty level with you. Should be sent as a number of successfully placed purchases from your store / portal with any payment methods.
         wishlist_count:
           type: number
           default: 0
@@ -1412,16 +1515,13 @@ components:
         phone:
           type: string
           nullable: true
-          example: '500000001'
-          description: >-
-            Customer’s phone number. This must be a valid mobile phone where the
-            consumer can receive text messages. The accepted phone masks are -
-            `500000001`, `0500000001`, `+971500000001`, `971500000001`.
+          example: "500000001"
+          description: Customer’s phone number. This must be a valid mobile phone where the consumer can receive text messages. The accepted phone masks are - `500000001`, `0500000001`, `+971500000001`, `971500000001`.
         dob:
           type: string
           nullable: true
           format: date
-          example: '2000-01-20'
+          example: !!str 2000-01-20
           description: Customer's date of birth; format is YYYY-MM-DD.
       required:
         - phone
@@ -1431,11 +1531,8 @@ components:
       type: object
       properties:
         amount:
-          $ref: '#/components/schemas/PaymentAmount'
-          description: >-
-            Total payment amount captured, including tax, shipping, and
-            excluding any discounts. Allows to send up to 2 decimals for AED and
-            SAR, up to 3 decimals for KWD.
+          $ref: "#/components/schemas/PaymentAmount"
+          description: Total payment amount captured, including tax, shipping, and excluding any discounts. Allows to send up to 2 decimals for AED and SAR, up to 3 decimals for KWD.
         reference_id:
           type: string
           default: string
@@ -1443,20 +1540,20 @@ components:
           description: Idempotency key. Used to avoid similar capture requests.
         tax_amount:
           type: string
-          default: '0.00'
+          default: "0.00"
           description: Tax amount captured.
         shipping_amount:
           type: string
-          default: '0.00'
+          default: "0.00"
           description: Shipping cost captured.
         discount_amount:
           type: string
-          default: '0.00'
+          default: "0.00"
           description: Total discount for the order. Should be positive or zero.
         items:
           type: array
           items:
-            $ref: '#/components/schemas/OrderItem'
+            $ref: "#/components/schemas/OrderItem"
           description: Array of objects representing the order items being captured.
       required:
         - amount
@@ -1467,41 +1564,36 @@ components:
         id:
           type: string
           format: uuid
-          example: capture id, uuid format
+          example: "capture id, uuid format"
           readOnly: true
           description: Unique capture ID, assigned by Tabby.
         created_at:
           type: string
           format: date-time
-          description: >-
-            Date and time the capture was created, in UTC, and displayed in ISO
-            8601 datetime format, assigned by Tabby.
+          description: Date and time the capture was created, in UTC, and displayed in ISO 8601 datetime format, assigned by Tabby.
         amount:
-          $ref: '#/components/schemas/PaymentAmount'
-          description: >-
-            Total payment amount captured, including tax, shipping, and
-            excluding any discounts. Allows to send up to 2 decimals for AED and
-            SAR, up to 3 decimals for KWD.
+          $ref: "#/components/schemas/PaymentAmount"
+          description: Total payment amount captured, including tax, shipping, and excluding any discounts. Allows to send up to 2 decimals for AED and SAR, up to 3 decimals for KWD.
         tax_amount:
           type: string
-          default: '0'
-          example: '0.00'
+          default: "0"
+          example: "0.00"
           description: Tax amount captured.
         shipping_amount:
           type: string
-          default: '0'
-          example: '0.00'
+          default: "0"
+          example: "0.00"
           description: Shipping cost captured.
         discount_amount:
           type: string
-          default: '0'
-          example: '0.00'
+          default: "0"
+          example: "0.00"
           description: Total discount for the order. Should be positive or zero.
         items:
           type: array
           nullable: true
           items:
-            $ref: '#/components/schemas/OrderItemResponse'
+            $ref: "#/components/schemas/OrderItemResponse"
           description: Array of objects representing the order items being captured.
         reference_id:
           type: string
@@ -1522,53 +1614,52 @@ components:
             nullable: true
             format: uri
             example: https://checkout.tabby.ai/
-            description: 'UAE/Kuwait: checkout.tabby.ai, KSA: checkout.tabby.sa'
+            description: "UAE: checkout.tabby.ai, KSA: checkout.tabby.sa"
             readOnly: true
           qr_code:
             type: string
             nullable: true
             format: uri
             example: https://api.tabby.ai/api/v2/checkout/{id}/hpp_link_qr
-            description: 'UAE/Kuwait: api.tabby.ai, KSA: api.tabby.sa'
+            description: "UAE: api.tabby.ai, KSA: api.tabby.sa"
             readOnly: true
     CheckoutCreation:
       description: Payment object associated with the current session.
       type: object
       properties:
         amount:
-          $ref: '#/components/schemas/PaymentAmount'
+          $ref: "#/components/schemas/PaymentAmount"
         currency:
-          $ref: '#/components/schemas/Currency'
+          $ref: "#/components/schemas/Currency"
+        buyer:
+          $ref: "#/components/schemas/Buyer"
+        shipping_address:
+          $ref: "#/components/schemas/ShippingAddress"
+        order:
+          $ref: "#/components/schemas/Order"
+        buyer_history:
+          $ref: "#/components/schemas/BuyerHistory"
+        order_history:
+          type: array
+          description: "**Recommended, not required.** Array of objects, should contain information on 5-10 previously placed via any payment method orders in any status, current order excluded."
+          items:
+            $ref: "#/components/schemas/CheckoutCreationOrderHistory"
+          x-mint:
+            post:
+              - recommended
         description:
           type: string
           example: test payload
-        buyer:
-          $ref: '#/components/schemas/Buyer'
-        shipping_address:
-          $ref: '#/components/schemas/ShippingAddress'
-        order:
-          $ref: '#/components/schemas/Order'
-        buyer_history:
-          $ref: '#/components/schemas/BuyerHistory'
-        order_history:
-          type: array
-          description: >-
-            Array of objects, should contain information on 5-10 previously
-            placed via any payment method orders in any status, current order
-            excluded.
-          items:
-            $ref: '#/components/schemas/CheckoutCreationOrderHistory'
         meta:
-          $ref: '#/components/schemas/Meta'
+          $ref: "#/components/schemas/Meta"
         attachment:
-          $ref: '#/components/schemas/Attachment_V1'
+          $ref: "#/components/schemas/CheckoutAttachment"
       required:
         - amount
         - currency
         - buyer
         - order
         - buyer_history
-        - order_history
         - shipping_address
     CheckoutCreationOrderHistory:
       type: object
@@ -1576,22 +1667,16 @@ components:
         purchased_at:
           type: string
           format: date-time
-          description: >-
-            Date and time the order was placed, in UTC, and displayed in ISO
-            8601 datetime format.
+          description: Date and time the order was placed, in UTC, and displayed in ISO 8601 datetime format.
+          x-mint:
+            post:
+              - recommended
         amount:
-          $ref: '#/components/schemas/PaymentAmount'
-          description: >-
-            Total payment amount, including tax, shipping, and excluding any
-            discounts. Allows to send up to 2 decimals for AED and SAR, up to 3
-            decimals for KWD.
-        payment_method:
-          type: string
-          enum:
-            - card
-            - cod
-          example: card
-          description: Payment method used.
+          $ref: "#/components/schemas/PaymentAmount"
+          description: Total payment amount, including tax, shipping, and excluding any discounts. Allows to send up to 2 decimals for AED and SAR, up to 3 decimals for KWD.
+          x-mint:
+            post:
+              - recommended
         status:
           type: string
           enum:
@@ -1602,25 +1687,86 @@ components:
             - canceled
             - unknown
           description: Status of the order.
+          x-mint:
+            post:
+              - recommended
         buyer:
-          $ref: '#/components/schemas/Buyer'
+          $ref: "#/components/schemas/OrderHistoryBuyer"
+          x-mint:
+            post:
+              - recommended
         shipping_address:
-          $ref: '#/components/schemas/ShippingAddress'
+          $ref: "#/components/schemas/OrderHistoryShippingAddress"
+          x-mint:
+            post:
+              - recommended
+        payment_method:
+          type: string
+          enum:
+            - card
+            - cod
+          example: card
+          description: Payment method used.
         items:
           type: array
           items:
-            $ref: '#/components/schemas/OrderItemHistoryRequest'
-          description: >-
-            Array of objects representing the order items in this payment. If
-            you want to offer consumers a discount, use this object to create a
-            “discount order item”, with the unit_price set to the negative value
-            of the discount.
-      required:
-        - purchased_at
-        - amount
-        - status
-        - buyer
-        - shipping_address
+            $ref: "#/components/schemas/OrderItemHistoryRequest"
+          description: Array of objects representing the order items in this payment. If you want to offer consumers a discount, use this object to create a “discount order item”, with the unit_price set to the negative value of the discount.
+    OrderHistoryBuyer:
+      description: Customer information. Sent inside the recommended payment.order_history, so none of its fields carry the required badge. Send them whenever you send an order-history entry.
+      type: object
+      properties:
+        name:
+          type: string
+          example: John Doe
+          description: Customer’s full name.
+          x-mint:
+            post:
+              - recommended
+        email:
+          type: string
+          format: email
+          description: Customer’s email address.
+          x-mint:
+            post:
+              - recommended
+        phone:
+          type: string
+          example: "500000001"
+          description: Customer’s phone number. This must be a valid mobile phone where the consumer can receive text messages. The accepted phone masks are - `500000001`, `0500000001`, `+971500000001`, `971500000001`.
+          x-mint:
+            post:
+              - recommended
+        dob:
+          type: string
+          format: date
+          example: !!str 2000-01-20
+          description: Customer's date of birth; format is YYYY-MM-DD.
+    OrderHistoryShippingAddress:
+      description: Shipping address. Sent inside the recommended payment.order_history, so none of its fields carry the required badge. Send them whenever you send an order-history entry.
+      type: object
+      properties:
+        city:
+          type: string
+          example: Dubai
+          description: Name of city, municipality, or village.
+          x-mint:
+            post:
+              - recommended
+        address:
+          type: string
+          example: Dubai
+          description: Building name, apartment number.
+          x-mint:
+            post:
+              - recommended
+        zip:
+          type: string
+          example: "1111"
+          description: Postal code.
+          x-mint:
+            post:
+              - recommended
     CheckoutProduct:
       type: object
       properties:
@@ -1636,7 +1782,7 @@ components:
           example: true
           readOnly: true
         rejection_reason:
-          $ref: '#/components/schemas/CheckoutProductRejectionReason'
+          $ref: "#/components/schemas/CheckoutProductRejectionReason"
       required:
         - type
         - is_available
@@ -1647,7 +1793,7 @@ components:
         - order_amount_too_high
         - order_amount_too_low
         - not_available
-        - 'null'
+        - "null"
       example: null
       description: |
         The reason why this product is not available to use
@@ -1661,32 +1807,58 @@ components:
       type: object
       properties:
         id:
-          $ref: '#/components/schemas/PaymentID'
+          $ref: "#/components/schemas/PaymentID"
         created_at:
-          $ref: '#/components/schemas/PaymentCreatedAt'
+          $ref: "#/components/schemas/PaymentCreatedAt"
+        #        expires_at:
+        #          $ref: "#/components/schemas/PaymentExpiresAt"
         status:
-          $ref: '#/components/schemas/PaymentStatus'
+          $ref: "#/components/schemas/PaymentStatus"
           example: CREATED
         is_test:
           readOnly: true
           type: boolean
-          description: >-
-            Indicates whether this is a test payment (created using the Test API
-            keys or Production API Keys).
+          description: Indicates whether this is a test payment (created using the Test API keys or Production API Keys).
         amount:
-          $ref: '#/components/schemas/PaymentAmount'
+          $ref: "#/components/schemas/PaymentAmount"
         currency:
-          $ref: '#/components/schemas/Currency'
+          $ref: "#/components/schemas/Currency"
         description:
           type: string
           nullable: true
           example: test payload
+        #        buyer:
+        #          $ref: "#/components/schemas/BuyerResponse"
+        #        shipping_address:
+        #          $ref: "#/components/schemas/ShippingAddressResponse"
         order:
-          $ref: '#/components/schemas/OrderResponse'
+          $ref: "#/components/schemas/OrderResponse"
+        #        captures:
+        #          type: array
+        #          nullable: true
+        #          readOnly: true
+        #          items:
+        #            type: object
+        #          default: []
+        #        refunds:
+        #          type: array
+        #          nullable: true
+        #          readOnly: true
+        #          items:
+        #            type: object
+        #          default: []
+        #        buyer_history:
+        #          $ref: "#/components/schemas/BuyerHistoryResponse"
+        #        order_history:
+        #          type: array
+        #          nullable: true
+        #          description: Array of objects, should contain information on 5-10 previously placed via any payment method orders in any status, current order excluded.
+        #          items:
+        #            $ref: "#/components/schemas/OrderHistoryResponse"
         meta:
-          $ref: '#/components/schemas/Meta'
+          $ref: "#/components/schemas/Meta"
         attachment:
-          $ref: '#/components/schemas/Attachment_V1'
+          $ref: "#/components/schemas/Attachment_V1"
       required:
         - amount
         - currency
@@ -1701,37 +1873,43 @@ components:
         id:
           type: string
           format: uuid
-          example: session id, uuid format
+          example: "session id, uuid format"
           readOnly: true
           description: Unique identifier for the checkout Session, assigned by Tabby.
         configuration:
           type: object
           description: Some details associated with the current session.
           properties:
+            #            currency:
+            #              $ref: "#/components/schemas/Currency"
             available_products:
               type: object
               nullable: true
               properties:
                 installments:
-                  $ref: '#/components/schemas/CheckoutConfigurationProduct'
+                  $ref: "#/components/schemas/CheckoutConfigurationProduct"
                   description: Links to redirect customers to Tabby Checkout.
+            #            expires_at:
+            #              type: string
+            #              format: date-time
+            #              readOnly: true
+            #              example: 2025-07-17
+            #              description: Session expiration time.
             products:
               type: object
               description: Products and theirs availability
               properties:
                 installments:
-                  $ref: '#/components/schemas/CheckoutProduct'
+                  $ref: "#/components/schemas/CheckoutProduct"
         token:
           type: string
           example: null
           nullable: true
-          description: >
-            In the response, this field will be filled with `token` value if
-            session status is 'approved'.
-
+          description: |
+            In the response, this field will be filled with `token` value if session status is 'approved'.
             You can use that token for Tokenized Payments and Web Checkout.
         payment:
-          $ref: '#/components/schemas/CheckoutResponsePayment'
+          $ref: "#/components/schemas/CheckoutResponsePayment"
         status:
           type: string
           readOnly: true
@@ -1742,8 +1920,7 @@ components:
             - approved
           example: created
           description: >
-            Status of the current session. Used at the pre-scoring and session
-            creation steps.
+            Status of the current session. Used at the pre-scoring and session creation steps.
               - `created` is returned when the request is approved and the customer is eligible to use Tabby
               - `rejected` means that there are no available products for a customer
               - `expired` and `approved` - used for specific type of integration, kindly ignore them if not communicated directly
@@ -1755,82 +1932,91 @@ components:
               nullable: true
               format: uri
               example: https://your-store/success
-              description: >-
-                URL where to redirect after payment is Authorized. 'Thank you'
-                page recommended.
+              description: URL where to redirect after payment is Authorized. 'Thank you' page recommended.
             cancel:
               type: string
               nullable: true
               format: uri
               example: https://your-store/cancel
-              description: >-
-                URL where to proceed after cancel payment status. Checkout page
-                recommended.
+              description: URL where to proceed after cancel payment status. Checkout page recommended.
             failure:
               type: string
               nullable: true
               format: uri
               example: https://your-store/failure
-              description: >-
-                URL where to proceed after failure payment status (Rejected).
-                Checkout page recommended.
+              description: URL where to proceed after failure payment status (Rejected). Checkout page recommended.
+        merchant:
+          type: object
+          readOnly: true
+          description: Merchant the session was created for.
+          properties:
+            name:
+              type: string
+              example: Your store name
+              description: Name of your store as registered with Tabby.
+    #        lang:
+    #          type: string
+    #          readOnly: true
+    #          enum:
+    #            - ara
+    #            - eng
+    #          example: eng
+    #        merchant_code:
+    #          type: string
+    #          nullable: true
+    #          example: code provided to you from Tabby side
+    #          readOnly: true
     Currency:
       type: string
       enum:
         - AED
         - SAR
-        - KWD
       example: AED
-      description: >
-        ISO 4217 currency code for the payment amount. Currently there are 3
-        possible currency options - depending on the country where the store is
-        located:
+      description: |
+        ISO 4217 currency code for the payment amount. Currently there are 2 possible currency options - depending on the country where the store is located:
           - `AED` - United Arab Emirates Dirham
           - `SAR` - Saudi Riyal
-          - `KWD` - Kuwaiti Dinar
     Dispute:
       type: object
       properties:
         id:
-          $ref: '#/components/schemas/DisputeID'
+          $ref: "#/components/schemas/DisputeID"
         attachments:
-          $ref: '#/components/schemas/DisputeAttachments'
+          $ref: "#/components/schemas/DisputeAttachments"
         payment_id:
-          $ref: '#/components/schemas/PaymentID'
+          $ref: "#/components/schemas/PaymentID"
           description: ID of the payment.
         amount:
           type: string
-          example: '100.00'
+          example: "100.00"
           description: Total disputed amount.
         currency:
-          $ref: '#/components/schemas/Currency'
-          description: >-
-            The currency of the dispute. It's always equal to the currency of
-            the payment.
+          $ref: "#/components/schemas/Currency"
+          description: The currency of the dispute. It's always equal to the currency of the payment.
         created_at:
-          $ref: '#/components/schemas/DisputeCreatedAt'
+          $ref: "#/components/schemas/DisputeCreatedAt"
         expired_at:
-          $ref: '#/components/schemas/DisputeExpiredAt'
+          $ref: "#/components/schemas/DisputeExpiredAt"
         status:
-          $ref: '#/components/schemas/DisputeStatus'
+          $ref: "#/components/schemas/DisputeStatus"
         reason:
-          $ref: '#/components/schemas/DisputeReason'
+          $ref: "#/components/schemas/DisputeReason"
         days_left:
-          $ref: '#/components/schemas/DisputeDaysLeft'
+          $ref: "#/components/schemas/DisputeDaysLeft"
         history:
           type: array
           items:
-            $ref: '#/components/schemas/DisputeHistoryItem'
+            $ref: "#/components/schemas/DisputeHistoryItem"
         items:
           type: array
           items:
-            $ref: '#/components/schemas/DisputeOrderItem'
+            $ref: "#/components/schemas/DisputeOrderItem"
         order_number:
           type: string
-          example: '#1234'
+          example: "#1234"
           description: Merchant-assigned order number.
         comment:
-          $ref: '#/components/schemas/DisputeComment'
+          $ref: "#/components/schemas/DisputeComment"
       required:
         - id
         - attachments
@@ -1864,12 +2050,12 @@ components:
         id:
           type: string
           format: uuid
-          example: evidence id, uuid format
+          example: "evidence id, uuid format"
           description: Evidence ID.
         dispute_id:
           type: string
           format: uuid
-          example: dispute id, uuid format
+          example: "dispute id, uuid format"
           description: Dispute ID.
         content:
           type: string
@@ -1882,14 +2068,14 @@ components:
         created_at:
           type: string
           format: date-time
-          example: '2024-01-15T10:30:00Z'
+          example: "2024-01-15T10:30:00Z"
           description: Creation timestamp in UTC, ISO 8601 datetime format.
         attachment_ids:
           type: array
           items:
             type: string
             format: uuid
-            example: attachment id, uuid format
+            example: "attachment id, uuid format"
           description: Array of attachment IDs.
       required:
         - id
@@ -1900,10 +2086,8 @@ components:
     DisputeCreatedAt:
       type: string
       readOnly: true
-      example: 2018-10-17T00:00:00.000Z
-      description: >-
-        Date and time the Dispute was created, in UTC, and displayed in ISO 8601
-        datetime format.
+      example: 2018-10-17
+      description: Date and time the Dispute was created, in UTC, and displayed in ISO 8601 datetime format.
     DisputeDaysLeft:
       type: integer
       format: uint16
@@ -1911,10 +2095,8 @@ components:
     DisputeExpiredAt:
       type: string
       readOnly: true
-      example: 2018-10-17T00:00:00.000Z
-      description: >-
-        Date and time of the expiration of the Dispute, in UTC, and displayed in
-        ISO 8601 datetime format.
+      example: 2018-10-17
+      description: Date and time of the expiration of the Dispute, in UTC, and displayed in ISO 8601 datetime format.
     DisputeHistoryItem:
       type: object
       properties:
@@ -1923,21 +2105,16 @@ components:
           items:
             type: string
             example: attachment_1
-          description: >-
-            Array of links to images which were uploaded by customer or
-            merchant.
+          description: Array of links to images which were uploaded by customer or merchant.
         created_at:
           type: string
-          example: 2018-10-17T00:00:00.000Z
-          description: >-
-            Date and time of creation of dispute history items, in UTC, and
-            displayed in ISO 8601 datetime format.
+          example: 2018-10-17
+          description: Date and time of creation of dispute history items, in UTC, and displayed in ISO 8601 datetime format.
         created_by:
           type: string
           example: email address of the source
-          description: >
-            Indicates the entity responsible for the creation of the record. It
-            can take one of the following values:
+          description: |
+            Indicates the entity responsible for the creation of the record. It can take one of the following values:
               - If `source` is set to `customer`, this field will contain the email address of the customer;
               - If `source` is set to `merchant` and the action was performed through the merchant-dashboard, then field will contain the email address of the dashboard user;
               - If `source` is set to `merchant` and the action was performed through the Disputes API, this field will contain the constant value 'Disputes API';
@@ -1945,9 +2122,8 @@ components:
         content:
           type: string
           example: customer comment
-          description: >
-            Contains additional information or comments related to the performed
-            action. It can take one of the following values:
+          description: |
+            Contains additional information or comments related to the performed action. It can take one of the following values:
               - If `source` is set to `customer`, this field will contain the customer's comment.
               - If `source` is set to `merchant`, this field will contain the reason for the challenge.
               - If `source` is set to `tabby-support`, this field will be empty.
@@ -1958,9 +2134,8 @@ components:
             - merchant
             - tabby-support
           example: merchant
-          description: >
-            This field specifies author that led to the creation of the record.
-            It can take one of the following values:
+          description: |
+            This field specifies author that led to the creation of the record. It can take one of the following values:
               - `customer`: Indicates that the action was initiated by a customer;
               - `merchant`: Indicates that the action was initiated by a merchant;
               - `tabby-support`: Indicates that the action was initiated by Tabby support.
@@ -1999,9 +2174,7 @@ components:
         note:
           type: string
           example: additional comments
-          description: >-
-            Contains additional message provided by merchant while perform
-            action.
+          description: Contains additional message provided by merchant while perform action.
       required:
         - attachments
         - created_at
@@ -2012,48 +2185,46 @@ components:
     DisputeID:
       type: string
       format: uuid
-      example: dispute id, uuid format
+      example: "dispute id, uuid format"
       readOnly: true
       description: ID of the dispute.
     DisputeNoHistory:
       type: object
       properties:
         id:
-          $ref: '#/components/schemas/DisputeID'
+          $ref: "#/components/schemas/DisputeID"
         attachments:
-          $ref: '#/components/schemas/DisputeAttachments'
+          $ref: "#/components/schemas/DisputeAttachments"
         payment_id:
-          $ref: '#/components/schemas/PaymentID'
+          $ref: "#/components/schemas/PaymentID"
           description: ID of the payment.
         amount:
           type: string
-          example: '100.00'
+          example: "100.00"
           description: Total disputed amount.
         currency:
-          $ref: '#/components/schemas/Currency'
-          description: >-
-            The currency of the dispute. It's always equal to the currency of
-            the payment.
+          $ref: "#/components/schemas/Currency"
+          description: The currency of the dispute. It's always equal to the currency of the payment.
         created_at:
-          $ref: '#/components/schemas/DisputeCreatedAt'
+          $ref: "#/components/schemas/DisputeCreatedAt"
         expired_at:
-          $ref: '#/components/schemas/DisputeExpiredAt'
+          $ref: "#/components/schemas/DisputeExpiredAt"
         status:
-          $ref: '#/components/schemas/DisputeStatus'
+          $ref: "#/components/schemas/DisputeStatus"
         reason:
-          $ref: '#/components/schemas/DisputeReason'
+          $ref: "#/components/schemas/DisputeReason"
         days_left:
-          $ref: '#/components/schemas/DisputeDaysLeft'
+          $ref: "#/components/schemas/DisputeDaysLeft"
         items:
           type: array
           items:
-            $ref: '#/components/schemas/DisputeOrderItem'
+            $ref: "#/components/schemas/DisputeOrderItem"
         order_number:
           type: string
-          example: '#1234'
+          example: "#1234"
           description: Merchant-assigned order number.
         comment:
-          $ref: '#/components/schemas/DisputeComment'
+          $ref: "#/components/schemas/DisputeComment"
       required:
         - id
         - attachments
@@ -2081,7 +2252,7 @@ components:
           description: Order item title.
         unit_price:
           type: string
-          example: '100.00'
+          example: "100.00"
           description: Order item unit price.
       required:
         - reference_id
@@ -2096,9 +2267,8 @@ components:
         - product_issue
         - not_delivered
       example: unreceived_refund
-      description: >
-        Cause of the dispute was created (selected by customer). There are only
-        four reasons:
+      description: |
+        Cause of the dispute was created (selected by customer). There are only four reasons:
           - `unreceived_refund` - a refund not received
           - `identity_theft` - I did not place this order (also known as identity theft)
           - `product_issue` - there was a problem with the product
@@ -2126,16 +2296,10 @@ components:
           - `evidence_customer` - waiting for evidence from the customer
     FlightPointsSimple:
       type: object
-      required:
-        - origin
-        - destination
       properties:
         origin:
           description: Origin city and airport
           type: object
-          required:
-            - air_code
-            - city_code
           properties:
             air_code:
               type: string
@@ -2148,9 +2312,6 @@ components:
         destination:
           description: Destination city and airport
           type: object
-          required:
-            - air_code
-            - city_code
           properties:
             air_code:
               type: string
@@ -2162,15 +2323,7 @@ components:
               description: Destination city code, for example - LAX
     FlightReservationDetails:
       type: object
-      required:
-        - itinerary
-        - insurance
-        - passengers
       properties:
-        pnr:
-          type: string
-          example: Trip booking number, e.g. TR9088999
-          description: Trip booking number, e.g. TR9088999
         itinerary:
           description: Itinerary data, one per segment
           type: array
@@ -2196,8 +2349,7 @@ components:
                 description: RFC3339 e.g. 2018-10-17T07:26:33Z
                 type: string
                 format: date-time
-                pattern: >-
-                  ^2[0-9]{3}-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-5][0-9]Z$
+                pattern: ^2[0-9]{3}-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-5][0-9]Z$
               class:
                 type: string
                 example: class
@@ -2237,7 +2389,7 @@ components:
               dob:
                 description: ISO 8601 date of birth, e.g. 2018-10-17
                 type: string
-                example: 2018-10-17T00:00:00.000Z
+                example: 2018-10-17
               document_type:
                 type: string
                 example: document_type
@@ -2260,25 +2412,17 @@ components:
                   - M
                   - O
                 example: F
-        affiliate_name:
-          description: >-
-            Name of the affiliate that originated the purchase. If none, leave
-            blank.
-          type: string
-          example: >-
-            Name of the affiliate that originated the purchase. If none, leave
-            blank.
-    HotelReservationDetails:
-      type: object
-      required:
-        - hotel_itinerary
-        - insurance
-        - passengers
-      properties:
         pnr:
           type: string
-          example: TR9088999
+          example: "Trip booking number, e.g. TR9088999"
           description: Trip booking number, e.g. TR9088999
+        affiliate_name:
+          description: Name of the affiliate that originated the purchase. If none, leave blank.
+          type: string
+          example: "Name of the affiliate that originated the purchase. If none, leave blank."
+    HotelReservationDetails:
+      type: object
+      properties:
         hotel_itinerary:
           description: Hotel itinerary data, one per segment
           type: array
@@ -2346,7 +2490,7 @@ components:
               dob:
                 description: ISO 8601 date of birth, e.g. 2018-10-17
                 type: string
-                example: 2018-10-17T00:00:00.000Z
+                example: 2018-10-17
               document_type:
                 type: string
                 example: document_type
@@ -2369,28 +2513,20 @@ components:
                   - M
                   - O
                 example: M
-        affiliate_name:
-          description: >-
-            Name of the affiliate that originated the purchase. If none, leave
-            blank.
+        pnr:
           type: string
-          example: >-
-            Name of the affiliate that originated the purchase. If none, leave
-            blank.
+          example: TR9088999
+          description: Trip booking number, e.g. TR9088999
+        affiliate_name:
+          description: Name of the affiliate that originated the purchase. If none, leave blank.
+          type: string
+          example: "Name of the affiliate that originated the purchase. If none, leave blank."
     InsuranceDetails:
       type: object
-      required:
-        - policy_details
-        - client
       properties:
         policy_details:
           description: Information about insurance
           type: object
-          required:
-            - insurance_type
-            - insurance_start_dt
-            - insurance_end_dt
-            - insured_amount
           properties:
             insurance_type:
               description: Insurance policy type
@@ -2399,22 +2535,18 @@ components:
             insurance_start_dt:
               description: ISO 8601 start date, e.g. 2018-10-17
               type: string
-              example: 2018-10-17T00:00:00.000Z
+              example: 2018-10-17
             insurance_end_dt:
               description: ISO 8601 end date, e.g. 2018-10-17
               type: string
-              example: 2018-10-17T00:00:00.000Z
+              example: 2018-10-17
             insured_amount:
               description: Amount of insurance policy
               type: string
-              example: '100'
+              example: "100"
             car_details:
               description: Required for car insurance
               type: object
-              required:
-                - manufacturer
-                - model
-                - year
               properties:
                 manufacturer:
                   type: string
@@ -2428,9 +2560,6 @@ components:
             travel_details:
               description: Required for travel insurance
               type: object
-              required:
-                - departure_country
-                - arrival_country
               properties:
                 departure_country:
                   type: string
@@ -2446,27 +2575,23 @@ components:
               example: provider_name
         client:
           type: object
-          required:
-            - first_name
-            - last_name
-            - document_type
           properties:
-            full_name:
-              type: string
-              example: full_name
             first_name:
               type: string
               example: first_name
             last_name:
               type: string
               example: last_name
-            dob:
-              description: ISO 8601 date of birth, e.g. 2018-10-17
-              type: string
-              example: 2018-10-17T00:00:00.000Z
             document_type:
               type: string
               example: document_type
+            full_name:
+              type: string
+              example: full_name
+            dob:
+              description: ISO 8601 date of birth, e.g. 2018-10-17
+              type: string
+              example: 2018-10-17
             document_id:
               type: string
               example: document_id
@@ -2483,17 +2608,7 @@ components:
               example: F
         payment_history_simple:
           type: object
-          required:
-            - date_of_last_paid_purchase
-            - date_of_first_paid_purchase
           properties:
-            unique_account_identifier:
-              type: string
-              example: unique name / id of the customer
-              description: Unique name / number to identify the specific customer account
-            paid_before_flag:
-              type: boolean
-              description: Whether the customer has paid before or not
             date_of_last_paid_purchase:
               description: ISO 8601 date e.g. 2018-10-17
               type: string
@@ -2504,6 +2619,13 @@ components:
               type: string
               format: date
               pattern: ^2[0-9]{3}-[0-1][0-9]-[0-3][0-9]$
+            unique_account_identifier:
+              type: string
+              example: unique name / id of the customer
+              description: Unique name / number to identify the specific customer account
+            paid_before_flag:
+              type: boolean
+              description: Whether the customer has paid before or not
     LanguageCode:
       type: string
       enum:
@@ -2517,7 +2639,7 @@ components:
       properties:
         seller_id:
           type: string
-          example: '57327813'
+          example: "57327813"
           description: Unique ID of the seller within your marketplace.
         seller_name:
           type: string
@@ -2529,103 +2651,79 @@ components:
           description: Category of the seller within your marketplace.
         seller_website:
           type: string
-          example: https://www.petshop.com
+          example: "https://www.petshop.com"
           description: Website of the seller within your marketplace.
         seller_phone:
           type: string
-          example: '500000001'
+          example: "500000001"
           description: Seller's phone number.
         seller_registration_date:
           type: string
           format: date-time
-          description: >-
-            Seller's registration date, in UTC, and displayed in ISO 8601
-            datetime format.
+          description: Seller's registration date, in UTC, and displayed in ISO 8601 datetime format.
         seller_commercial_registration_number:
           type: string
-          example: '1012345678'
+          example: "1012345678"
           description: Seller's commercial registration number.
-      required:
-        - seller_id
-        - seller_name
-        - seller_category
-        - seller_website
-        - seller_phone
-        - seller_registration_date
-        - seller_commercial_registration_number
     MerchantUrls:
       type: object
-      description: >-
-        Used for redirecting the customer after Tabby Checkout flow. Required
-        for Web integration, optional for Mobile App integration.
+      description: Used for redirecting the customer after Tabby Checkout flow. Required for Web integration, optional for Mobile App integration.
       properties:
         success:
           type: string
           format: uri
           example: https://your-store/success
-          description: >-
-            URL to redirect the customer to merchant's 'Thank you' page after
-            success payment. Payment status = `AUTHORIZED` or `CLOSED`.
+          description: URL to redirect the customer to merchant's 'Thank you' page after success payment. Payment status = `AUTHORIZED` or `CLOSED`.
         cancel:
           type: string
           format: uri
           example: https://your-store/cancel
-          description: >-
-            URL to redirect the customer back to merchant's Checkout page after
-            payment cancellation by customer. Payment status = `EXPIRED`.
+          description: URL to redirect the customer back to merchant's Checkout page after payment cancellation by customer. Payment status = `EXPIRED`.
         failure:
           type: string
           format: uri
           example: https://your-store/failure
-          description: >-
-            URL to redirect the customer back to merchant's Checkout page after
-            payment rejection by Tabby. Payment status = `REJECTED`.
+          description: URL to redirect the customer back to merchant's Checkout page after payment rejection by Tabby. Payment status = `REJECTED`.
     Meta:
-      description: >-
-        Merchant-defined data about the payment. This field is a key-value map.
-        The example properties provided below.
+      description: Merchant-defined data about the payment. This field is a key-value map. The example properties provided below.
       type: object
       nullable: true
       properties:
         customer:
           type: string
           nullable: true
-          example: '#customer-id'
+          example: "#customer-id"
         order_id:
           type: string
           nullable: true
-          example: '#1234'
+          example: "#1234"
     Order:
       type: object
       properties:
         reference_id:
           type: string
-          example: '1001'
+          example: "1001"
           description: Merchant-assigned order number.
         updated_at:
           type: string
           format: date-time
-          description: >-
-            Date and time the order was last updated, in UTC, and displayed in
-            ISO 8601 datetime format.
+          description: Date and time the order was last updated, in UTC, and displayed in ISO 8601 datetime format.
         tax_amount:
           type: string
-          default: '0.00'
+          default: "0.00"
           description: Total tax for the order.
         shipping_amount:
           type: string
-          default: '0.00'
+          default: "0.00"
           description: Total shipping cost for the order.
         discount_amount:
           type: string
-          default: '0.00'
-          description: >-
-            Total discount for the order. Should be positive or zero. Shows up
-            on Tabby App for the Customer's convenience.
+          default: "0.00"
+          description: Total discount for the order. Should be positive or zero. Shows up on Tabby App for the Customer's convenience.
         items:
           type: array
           items:
-            $ref: '#/components/schemas/OrderItem'
+            $ref: "#/components/schemas/OrderItem"
           description: Array of objects representing the order items in this payment.
       required:
         - items
@@ -2636,15 +2734,10 @@ components:
         purchased_at:
           type: string
           format: date-time
-          description: >-
-            Date and time the order was placed, in UTC, and displayed in ISO
-            8601 datetime format.
+          description: Date and time the order was placed, in UTC, and displayed in ISO 8601 datetime format.
         amount:
-          $ref: '#/components/schemas/PaymentAmount'
-          description: >-
-            Total payment amount, including tax, shipping, and excluding any
-            discounts. Allows to send up to 2 decimals for AED and SAR, up to 3
-            decimals for KWD.
+          $ref: "#/components/schemas/PaymentAmount"
+          description: Total payment amount, including tax, shipping, and excluding any discounts. Allows to send up to 2 decimals for AED and SAR, up to 3 decimals for KWD.
         payment_method:
           type: string
           enum:
@@ -2663,18 +2756,14 @@ components:
             - unknown
           description: Status of the order.
         buyer:
-          $ref: '#/components/schemas/Buyer'
+          $ref: "#/components/schemas/Buyer"
         shipping_address:
-          $ref: '#/components/schemas/ShippingAddress'
+          $ref: "#/components/schemas/ShippingAddress"
         items:
           type: array
           items:
-            $ref: '#/components/schemas/OrderItemHistoryResponse'
-          description: >-
-            Array of objects representing the order items in this payment. If
-            you want to offer consumers a discount, use this object to create a
-            “discount order item”, with the unit_price set to the negative value
-            of the discount.
+            $ref: "#/components/schemas/OrderItemHistoryResponse"
+          description: Array of objects representing the order items in this payment. If you want to offer consumers a discount, use this object to create a “discount order item”, with the unit_price set to the negative value of the discount.
       required:
         - purchased_at
         - amount
@@ -2688,15 +2777,10 @@ components:
           type: string
           nullable: true
           format: date-time
-          description: >-
-            Date and time the order was placed, in UTC, and displayed in ISO
-            8601 datetime format.
+          description: Date and time the order was placed, in UTC, and displayed in ISO 8601 datetime format.
         amount:
-          $ref: '#/components/schemas/PaymentAmountResponse'
-          description: >-
-            Total payment amount, including tax, shipping, and excluding any
-            discounts. Allows to send up to 2 decimals for AED and SAR, up to 3
-            decimals for KWD.
+          $ref: "#/components/schemas/PaymentAmountResponse"
+          description: Total payment amount, including tax, shipping, and excluding any discounts. Allows to send up to 2 decimals for AED and SAR, up to 3 decimals for KWD.
         payment_method:
           type: string
           nullable: true
@@ -2717,19 +2801,15 @@ components:
             - unknown
           description: Status of the order.
         buyer:
-          $ref: '#/components/schemas/BuyerResponse'
+          $ref: "#/components/schemas/BuyerResponse"
         shipping_address:
-          $ref: '#/components/schemas/ShippingAddressResponse'
+          $ref: "#/components/schemas/ShippingAddressResponse"
         items:
           type: array
           nullable: true
           items:
-            $ref: '#/components/schemas/OrderItemHistoryResponse'
-          description: >-
-            Array of objects representing the order items in this payment. If
-            you want to offer consumers a discount, use this object to create a
-            “discount order item”, with the unit_price set to the negative value
-            of the discount.
+            $ref: "#/components/schemas/OrderItemHistoryResponse"
+          description: Array of objects representing the order items in this payment. If you want to offer consumers a discount, use this object to create a “discount order item”, with the unit_price set to the negative value of the discount.
       required:
         - purchased_at
         - amount
@@ -2742,9 +2822,7 @@ components:
         reference_id:
           type: string
           example: SKU123
-          description: >-
-            Merchant’s product identifier. Displayed in Customer's App and
-            Merchant Dashboard, used for Item refunds and disputes.
+          description: Merchant’s product identifier. Displayed in Customer's App and Merchant Dashboard, used for Item refunds and disputes.
         title:
           type: string
           example: Name of the product
@@ -2761,23 +2839,23 @@ components:
           description: Quantity of the product ordered.
         unit_price:
           type: string
-          default: '0.00'
-          example: '0.00'
+          default: "0.00"
+          example: "0.00"
           description: Price per unit of the product. Should be positive or zero.
         discount_amount:
           type: string
-          default: '0.00'
-          example: '0.00'
+          default: "0.00"
+          example: "0.00"
           description: Amount of the applied discount if any. Should be positive or zero.
         image_url:
           type: string
           format: uri
-          example: https://example.com/
+          example: "https://example.com/"
           description: URL of the item image to show in the order information.
         product_url:
           type: string
           format: uri
-          example: https://example.com/
+          example: "https://example.com/"
           description: URL of the item at your store.
         gender:
           type: string
@@ -2791,10 +2869,7 @@ components:
         category:
           type: string
           example: Clothes
-          description: >-
-            Required as name of high-level category (Clothes, Electronics,etc.);
-            or a tree of category-subcategory1-subcategory2; or id of the
-            category and table with category-ids data mapped provided.
+          description: Required as name of high-level category (Clothes, Electronics,etc.); or a tree of category-subcategory1-subcategory2; or id of the category and table with category-ids data mapped provided.
         color:
           type: string
           example: white
@@ -2820,22 +2895,16 @@ components:
           description: Indicates whether a product can be returned
         barcode:
           type: string
-          example: '12345678'
-          description: >-
-            A machine-readable product identifier. Typically used for logistics
-            and scanning.
+          example: "12345678"
+          description: A machine-readable product identifier. Typically used for logistics and scanning.
         ppn:
           type: string
           example: MNXT2ZM/A
-          description: >-
-            Product Part Number assigned by the manufacturer. Used to identify
-            specific components or versions of a product.
+          description: Product Part Number assigned by the manufacturer. Used to identify specific components or versions of a product.
         seller:
           type: string
           example: Name of the Seller
-          description: >-
-            The name of the seller offering this item. This field is used to
-            distinguish products from different vendors on a single marketplace.
+          description: The name of the seller offering this item. This field is used to distinguish products from different vendors on a single marketplace.
       required:
         - title
         - quantity
@@ -2847,9 +2916,7 @@ components:
         reference_id:
           type: string
           example: SKU123
-          description: >-
-            Merchant’s product identifier. Displayed in Customer's App and
-            Merchant Dashboard, used for Item refunds and disputes.
+          description: Merchant’s product identifier. Displayed in Customer's App and Merchant Dashboard, used for Item refunds and disputes.
         title:
           type: string
           example: Name of the product
@@ -2866,23 +2933,23 @@ components:
           description: Quantity of the product ordered.
         unit_price:
           type: string
-          default: '0.00'
-          example: '0.00'
+          default: "0.00"
+          example: "0.00"
           description: Price per unit of the product. Should be positive or zero.
         discount_amount:
           type: string
-          default: '0.00'
-          example: '0.00'
+          default: "0.00"
+          example: "0.00"
           description: Amount of the applied discount if any. Should be positive or zero.
         image_url:
           type: string
           format: uri
-          example: https://example.com/
+          example: "https://example.com/"
           description: URL of the item image to show in the order information.
         product_url:
           type: string
           format: uri
-          example: https://example.com/
+          example: "https://example.com/"
           description: URL of the item at your store.
         gender:
           type: string
@@ -2896,10 +2963,7 @@ components:
         category:
           type: string
           example: Clothes
-          description: >-
-            Required as name of high-level category (Clothes, Electronics,etc.);
-            or a tree of category-subcategory1-subcategory2; or id of the
-            category and table with category-ids data mapped provided.
+          description: Required as name of high-level category (Clothes, Electronics,etc.); or a tree of category-subcategory1-subcategory2; or id of the category and table with category-ids data mapped provided.
         color:
           type: string
           example: white
@@ -2925,22 +2989,16 @@ components:
           description: Indicates whether a product can be returned
         barcode:
           type: string
-          example: '12345678'
-          description: >-
-            A machine-readable product identifier. Typically used for logistics
-            and scanning.
+          example: "12345678"
+          description: A machine-readable product identifier. Typically used for logistics and scanning.
         ppn:
           type: string
           example: MNXT2ZM/A
-          description: >-
-            Product Part Number assigned by the manufacturer. Used to identify
-            specific components or versions of a product.
+          description: Product Part Number assigned by the manufacturer. Used to identify specific components or versions of a product.
         seller:
           type: string
           example: Name of the Seller
-          description: >-
-            The name of the seller offering this item. This field is used to
-            distinguish products from different vendors on a single marketplace.
+          description: The name of the seller offering this item. This field is used to distinguish products from different vendors on a single marketplace.
     OrderItemHistoryResponse:
       type: object
       properties:
@@ -2948,9 +3006,7 @@ components:
           type: string
           nullable: true
           example: SKU123
-          description: >-
-            Merchant’s product identifier. Displayed in Customer's App and
-            Merchant Dashboard, used for Item refunds and disputes.
+          description: Merchant’s product identifier. Displayed in Customer's App and Merchant Dashboard, used for Item refunds and disputes.
         title:
           type: string
           nullable: true
@@ -2969,20 +3025,20 @@ components:
           description: Quantity of the product ordered.
         unit_price:
           type: string
-          default: '0'
-          example: '0.00'
+          default: "0"
+          example: "0.00"
           description: Price per unit of the product. Should be positive or zero.
         image_url:
           type: string
           nullable: true
           format: uri
-          example: https://example.com/
+          example: "https://example.com/"
           description: URL of the item image to show in the order information.
         product_url:
           type: string
           nullable: true
           format: uri
-          example: https://example.com/
+          example: "https://example.com/"
           description: URL of the item at your store.
         gender:
           type: string
@@ -2998,10 +3054,7 @@ components:
           type: string
           nullable: true
           example: Clothes
-          description: >-
-            Required as name of high-level category (Clothes, Electronics,etc.);
-            or a tree of category-subcategory1-subcategory2; or id of the
-            category and table with category-ids data mapped provided.
+          description: Required as name of high-level category (Clothes, Electronics,etc.); or a tree of category-subcategory1-subcategory2; or id of the category and table with category-ids data mapped provided.
         color:
           type: string
           nullable: true
@@ -3059,9 +3112,7 @@ components:
           type: string
           nullable: true
           example: SKU123
-          description: >-
-            Merchant’s product identifier. Displayed in Customer's App and
-            Merchant Dashboard, used for Item refunds and disputes.
+          description: Merchant’s product identifier. Displayed in Customer's App and Merchant Dashboard, used for Item refunds and disputes.
         title:
           type: string
           nullable: true
@@ -3080,20 +3131,20 @@ components:
           description: Quantity of the product ordered.
         unit_price:
           type: string
-          default: '0'
-          example: '0.00'
+          default: "0"
+          example: "0.00"
           description: Price per unit of the product. Should be positive or zero.
         image_url:
           type: string
           nullable: true
           format: uri
-          example: https://example.com/
+          example: "https://example.com/"
           description: URL of the item image to show in the order information.
         product_url:
           type: string
           nullable: true
           format: uri
-          example: https://example.com/
+          example: "https://example.com/"
           description: URL of the item at your store.
         gender:
           type: string
@@ -3109,10 +3160,7 @@ components:
           type: string
           nullable: true
           example: Clothes
-          description: >-
-            Required as name of high-level category (Clothes, Electronics,etc.);
-            or a tree of category-subcategory1-subcategory2; or id of the
-            category and table with category-ids data mapped provided.
+          description: Required as name of high-level category (Clothes, Electronics,etc.); or a tree of category-subcategory1-subcategory2; or id of the category and table with category-ids data mapped provided.
         color:
           type: string
           nullable: true
@@ -3159,28 +3207,24 @@ components:
         updated_at:
           type: string
           format: date-time
-          description: >-
-            Date and time the order was last updated, in UTC, and displayed in
-            ISO 8601 datetime format.
+          description: Date and time the order was last updated, in UTC, and displayed in ISO 8601 datetime format.
         tax_amount:
           type: string
-          default: '0.00'
+          default: "0.00"
           description: Total tax for the order.
         shipping_amount:
           type: string
-          default: '0.00'
+          default: "0.00"
           description: Total shipping cost for the order.
         discount_amount:
           type: string
-          default: '0.00'
-          description: >-
-            Total discount for the order. Should be positive or zero. Shows up
-            on Tabby App for the Customer's convenience.
+          default: "0.00"
+          description: Total discount for the order. Should be positive or zero. Shows up on Tabby App for the Customer's convenience.
         items:
           type: array
           nullable: true
           items:
-            $ref: '#/components/schemas/OrderItemResponse'
+            $ref: "#/components/schemas/OrderItemResponse"
           description: Array of objects representing the order items in this payment.
       required:
         - items
@@ -3192,36 +3236,32 @@ components:
         reference_id:
           type: string
           nullable: true
-          example: '1001'
+          example: "1001"
           description: Merchant-assigned order number.
         updated_at:
           type: string
           format: date-time
-          description: >-
-            Date and time the order was last updated, in UTC, and displayed in
-            ISO 8601 datetime format.
+          description: Date and time the order was last updated, in UTC, and displayed in ISO 8601 datetime format.
         tax_amount:
           type: string
-          default: '0'
-          example: '0.00'
+          default: "0"
+          example: "0.00"
           description: Total tax for the order.
         shipping_amount:
           type: string
-          default: '0'
-          example: '0.00'
+          default: "0"
+          example: "0.00"
           description: Total shipping cost for the order.
         discount_amount:
           type: string
-          default: '0'
-          example: '0.00'
-          description: >-
-            Total discount for the order. Should be positive or zero. Shows up
-            on Tabby App for the Customer's convenience.
+          default: "0"
+          example: "0.00"
+          description: Total discount for the order. Should be positive or zero. Shows up on Tabby App for the Customer's convenience.
         items:
           type: array
           nullable: true
           items:
-            $ref: '#/components/schemas/OrderItemResponse'
+            $ref: "#/components/schemas/OrderItemResponse"
           description: Array of objects representing the order items in this payment.
       required:
         - items
@@ -3243,54 +3283,48 @@ components:
           description: Returned total item count.
     PaymentAmount:
       type: string
-      example: '100'
-      description: >-
-        Total payment amount, including tax, shipping and any discounts. Allows
-        to send up to 2 decimals for AED and SAR, up to 3 decimals for KWD.
+      example: "100"
+      description: Total payment amount, including tax, shipping and any discounts. Allows to send up to 2 decimals for AED and SAR, up to 3 decimals for KWD.
     PaymentAmountResponse:
       type: string
       nullable: true
-      example: '100'
-      description: >-
-        Total payment amount, including tax, shipping and any discounts. Allows
-        to send up to 2 decimals for AED and SAR, up to 3 decimals for KWD.
+      example: "100"
+      description: Total payment amount, including tax, shipping and any discounts. Allows to send up to 2 decimals for AED and SAR, up to 3 decimals for KWD.
     PaymentCaptureResponse:
       description: Payment object.
       type: object
       properties:
         id:
-          $ref: '#/components/schemas/PaymentID'
+          $ref: "#/components/schemas/PaymentID"
         created_at:
-          $ref: '#/components/schemas/PaymentCreatedAt'
+          $ref: "#/components/schemas/PaymentCreatedAt"
         expires_at:
-          $ref: '#/components/schemas/PaymentExpiresAt'
+          $ref: "#/components/schemas/PaymentExpiresAt"
         status:
-          $ref: '#/components/schemas/PaymentStatus'
+          $ref: "#/components/schemas/PaymentStatus"
         is_test:
           readOnly: true
           type: boolean
-          description: >-
-            Indicates whether this is a test payment (created using the Test API
-            keys or Production API Keys).
+          description: Indicates whether this is a test payment (created using the Test API keys or Production API Keys).
         amount:
-          $ref: '#/components/schemas/PaymentAmount'
+          $ref: "#/components/schemas/PaymentAmount"
         currency:
-          $ref: '#/components/schemas/Currency'
+          $ref: "#/components/schemas/Currency"
         description:
           type: string
           nullable: true
           example: description
         buyer:
-          $ref: '#/components/schemas/BuyerResponse'
+          $ref: "#/components/schemas/BuyerResponse"
         shipping_address:
-          $ref: '#/components/schemas/ShippingAddressResponse'
+          $ref: "#/components/schemas/ShippingAddressResponse"
         order:
-          $ref: '#/components/schemas/OrderResponse'
+          $ref: "#/components/schemas/OrderResponse"
         captures:
           type: array
           readOnly: true
           items:
-            $ref: '#/components/schemas/CaptureResponse'
+            $ref: "#/components/schemas/CaptureResponse"
         refunds:
           type: array
           nullable: true
@@ -3299,20 +3333,17 @@ components:
             type: object
           default: []
         buyer_history:
-          $ref: '#/components/schemas/BuyerHistoryResponse'
+          $ref: "#/components/schemas/BuyerHistoryResponse"
         order_history:
           type: array
           nullable: true
-          description: >-
-            Array of objects, should contain information on 5-10 previously
-            placed via any payment method orders in any status, current order
-            excluded.
+          description: Array of objects, should contain information on 5-10 previously placed via any payment method orders in any status, current order excluded.
           items:
-            $ref: '#/components/schemas/OrderHistoryResponse'
+            $ref: "#/components/schemas/OrderHistoryResponse"
         meta:
-          $ref: '#/components/schemas/Meta'
+          $ref: "#/components/schemas/Meta"
         attachment:
-          $ref: '#/components/schemas/Attachment_V1'
+          $ref: "#/components/schemas/Attachment_V1"
       required:
         - amount
         - currency
@@ -3326,39 +3357,37 @@ components:
       type: object
       properties:
         id:
-          $ref: '#/components/schemas/PaymentID'
+          $ref: "#/components/schemas/PaymentID"
         created_at:
-          $ref: '#/components/schemas/PaymentCreatedAt'
+          $ref: "#/components/schemas/PaymentCreatedAt"
         expires_at:
-          $ref: '#/components/schemas/PaymentExpiresAt'
+          $ref: "#/components/schemas/PaymentExpiresAt"
         status:
-          $ref: '#/components/schemas/PaymentStatus'
+          $ref: "#/components/schemas/PaymentStatus"
         is_test:
           readOnly: true
           type: boolean
-          description: >-
-            Indicates whether this is a test payment (created using the Test API
-            keys or Production API Keys).
+          description: Indicates whether this is a test payment (created using the Test API keys or Production API Keys).
         amount:
-          $ref: '#/components/schemas/PaymentAmount'
+          $ref: "#/components/schemas/PaymentAmount"
         currency:
-          $ref: '#/components/schemas/Currency'
+          $ref: "#/components/schemas/Currency"
         description:
           type: string
           nullable: true
           example: description
         buyer:
-          $ref: '#/components/schemas/BuyerResponse'
+          $ref: "#/components/schemas/BuyerResponse"
         shipping_address:
-          $ref: '#/components/schemas/ShippingAddressResponse'
+          $ref: "#/components/schemas/ShippingAddressResponse"
         order:
-          $ref: '#/components/schemas/OrderResponse'
+          $ref: "#/components/schemas/OrderResponse"
         captures:
           type: array
           nullable: true
           readOnly: true
           items:
-            $ref: '#/components/schemas/CaptureResponse'
+            $ref: "#/components/schemas/CaptureResponse"
           default: []
         refunds:
           type: array
@@ -3368,20 +3397,17 @@ components:
             type: object
           default: []
         buyer_history:
-          $ref: '#/components/schemas/BuyerHistoryResponse'
+          $ref: "#/components/schemas/BuyerHistoryResponse"
         order_history:
           type: array
           nullable: true
-          description: >-
-            Array of objects, should contain information on 5-10 previously
-            placed via any payment method orders in any status, current order
-            excluded.
+          description: Array of objects, should contain information on 5-10 previously placed via any payment method orders in any status, current order excluded.
           items:
-            $ref: '#/components/schemas/OrderHistoryResponse'
+            $ref: "#/components/schemas/OrderHistoryResponse"
         meta:
-          $ref: '#/components/schemas/Meta'
+          $ref: "#/components/schemas/Meta"
         attachment:
-          $ref: '#/components/schemas/Attachment_V1'
+          $ref: "#/components/schemas/Attachment_V1"
       required:
         - amount
         - currency
@@ -3394,81 +3420,70 @@ components:
       type: string
       readOnly: true
       format: date-time
-      description: >-
-        Date and time the payment was created, in UTC, and displayed in ISO 8601
-        datetime format.
+      description: Date and time the payment was created, in UTC, and displayed in ISO 8601 datetime format.
     PaymentExpiresAt:
       type: string
       readOnly: true
       format: date-time
-      description: >-
-        Date and time the payment expires, in UTC, and displayed in ISO 8601
-        datetime format.
+      description: Date and time the payment expires, in UTC, and displayed in ISO 8601 datetime format.
     PaymentID:
       type: string
       format: uuid
-      example: payment id, uuid format
+      example: "payment id, uuid format"
       readOnly: true
-      description: >-
-        Unique identifier for the payment (UUID), assigned by Tabby. Save it on
-        your side!
+      description: Unique identifier for the payment (UUID), assigned by Tabby. Save it on your side!
     PaymentRefundResponse:
       description: Payment object.
       type: object
       properties:
         id:
-          $ref: '#/components/schemas/PaymentID'
+          $ref: "#/components/schemas/PaymentID"
         created_at:
-          $ref: '#/components/schemas/PaymentCreatedAt'
+          $ref: "#/components/schemas/PaymentCreatedAt"
         expires_at:
-          $ref: '#/components/schemas/PaymentExpiresAt'
+          $ref: "#/components/schemas/PaymentExpiresAt"
         status:
-          $ref: '#/components/schemas/PaymentStatus'
+          $ref: "#/components/schemas/PaymentStatus"
         is_test:
           readOnly: true
           type: boolean
-          description: >-
-            Indicates whether this is a test payment (created using the Test API
-            keys or Production API Keys).
+          description: Indicates whether this is a test payment (created using the Test API keys or Production API Keys).
         amount:
-          $ref: '#/components/schemas/PaymentAmount'
+          $ref: "#/components/schemas/PaymentAmount"
         currency:
-          $ref: '#/components/schemas/Currency'
+          $ref: "#/components/schemas/Currency"
         description:
           type: string
           nullable: true
           example: description
         buyer:
-          $ref: '#/components/schemas/BuyerResponse'
+          $ref: "#/components/schemas/BuyerResponse"
         shipping_address:
-          $ref: '#/components/schemas/ShippingAddressResponse'
+          $ref: "#/components/schemas/ShippingAddressResponse"
         order:
-          $ref: '#/components/schemas/OrderResponse'
+          $ref: "#/components/schemas/OrderResponse"
         captures:
           type: array
           readOnly: true
           items:
-            $ref: '#/components/schemas/CaptureResponse'
+            $ref: "#/components/schemas/CaptureResponse"
         refunds:
           type: array
           readOnly: true
           items:
-            $ref: '#/components/schemas/RefundResponse'
+            $ref: "#/components/schemas/RefundResponse"
         buyer_history:
-          $ref: '#/components/schemas/BuyerHistoryResponse'
+          $ref: "#/components/schemas/BuyerHistoryResponse"
         order_history:
           type: array
           nullable: true
-          description: >-
-            Array of objects, should contain information on 5-10 previously
-            placed via any payment method orders in any status, current order
-            excluded.
+          description: Array of objects, should contain information on 5-10 previously placed via any payment method orders in any status, current order excluded.
           items:
-            $ref: '#/components/schemas/OrderHistoryResponse'
+            $ref: "#/components/schemas/OrderHistoryResponse"
         meta:
-          $ref: '#/components/schemas/Meta'
+          $ref: "#/components/schemas/Meta"
         attachment:
-          $ref: '#/components/schemas/Attachment_V1'
+          $ref: "#/components/schemas/Attachment_V1"
       required:
         - amount
         - currency
@@ -3482,60 +3497,55 @@ components:
       type: object
       properties:
         id:
-          $ref: '#/components/schemas/PaymentID'
+          $ref: "#/components/schemas/PaymentID"
         created_at:
-          $ref: '#/components/schemas/PaymentCreatedAt'
+          $ref: "#/components/schemas/PaymentCreatedAt"
         expires_at:
-          $ref: '#/components/schemas/PaymentExpiresAt'
+          $ref: "#/components/schemas/PaymentExpiresAt"
         status:
-          $ref: '#/components/schemas/PaymentStatus'
+          $ref: "#/components/schemas/PaymentStatus"
         is_test:
           readOnly: true
           type: boolean
-          description: >-
-            Indicates whether this is a test payment (created using the Test API
-            keys or Production API Keys).
+          description: Indicates whether this is a test payment (created using the Test API keys or Production API Keys).
         amount:
-          $ref: '#/components/schemas/PaymentAmount'
+          $ref: "#/components/schemas/PaymentAmount"
         currency:
-          $ref: '#/components/schemas/Currency'
+          $ref: "#/components/schemas/Currency"
         description:
           type: string
           nullable: true
           example: description
         buyer:
-          $ref: '#/components/schemas/BuyerResponse'
+          $ref: "#/components/schemas/BuyerResponse"
         shipping_address:
-          $ref: '#/components/schemas/ShippingAddressResponse'
+          $ref: "#/components/schemas/ShippingAddressResponse"
         order:
-          $ref: '#/components/schemas/OrderResponse'
+          $ref: "#/components/schemas/OrderResponse"
         captures:
           type: array
           nullable: true
           readOnly: true
           items:
-            $ref: '#/components/schemas/CaptureResponse'
+            $ref: "#/components/schemas/CaptureResponse"
         refunds:
           type: array
           nullable: true
           readOnly: true
           items:
-            $ref: '#/components/schemas/RefundResponse'
+            $ref: "#/components/schemas/RefundResponse"
         buyer_history:
-          $ref: '#/components/schemas/BuyerHistoryResponse'
+          $ref: "#/components/schemas/BuyerHistoryResponse"
         order_history:
           type: array
           nullable: true
-          description: >-
-            Array of objects, should contain information on 5-10 previously
-            placed via any payment method orders in any status, current order
-            excluded.
+          description: Array of objects, should contain information on 5-10 previously placed via any payment method orders in any status, current order excluded.
           items:
-            $ref: '#/components/schemas/OrderHistoryResponse'
+            $ref: "#/components/schemas/OrderHistoryResponse"
         meta:
-          $ref: '#/components/schemas/Meta'
+          $ref: "#/components/schemas/Meta"
         attachment:
-          $ref: '#/components/schemas/Attachment_V1'
+          $ref: "#/components/schemas/Attachment_V1"
       required:
         - amount
         - currency
@@ -3554,79 +3564,66 @@ components:
         - REJECTED
         - EXPIRED
       example: CLOSED
-      description: >
+      description: |
         Status of the current payment:
-
-        - `CREATED` means that the payment is created successfully, but not
-        finished yet;
-
-        - `AUTHORIZED` and `CLOSED` mark the successfully approved and captured
-        payments accordingly;
-
-        - `REJECTED` is returned when a customer is rejected during Tabby
-        Checkout;
-
-        - `EXPIRED` is used when a customer cancels a payment or when Tabby
-        doesn't receive a successfully paid transaction after timeout.
+        - `CREATED` means that the payment is created successfully, but not finished yet;
+        - `AUTHORIZED` and `CLOSED` mark the successfully approved and captured payments accordingly;
+        - `REJECTED` is returned when a customer is rejected during Tabby Checkout;
+        - `EXPIRED` is used when a customer cancels a payment or when Tabby doesn't receive a successfully paid transaction after timeout.
     PaymentUpdate:
       description: Payment object.
       type: object
       properties:
         id:
-          $ref: '#/components/schemas/PaymentID'
+          $ref: "#/components/schemas/PaymentID"
         created_at:
-          $ref: '#/components/schemas/PaymentCreatedAt'
+          $ref: "#/components/schemas/PaymentCreatedAt"
         expires_at:
-          $ref: '#/components/schemas/PaymentExpiresAt'
+          $ref: "#/components/schemas/PaymentExpiresAt"
         status:
-          $ref: '#/components/schemas/PaymentStatus'
+          $ref: "#/components/schemas/PaymentStatus"
         is_test:
           readOnly: true
           type: boolean
-          description: >-
-            Indicates whether this is a test payment (created using the Test API
-            keys or Production API Keys).
+          description: Indicates whether this is a test payment (created using the Test API keys or Production API Keys).
         amount:
-          $ref: '#/components/schemas/PaymentAmount'
+          $ref: "#/components/schemas/PaymentAmount"
         currency:
-          $ref: '#/components/schemas/Currency'
+          $ref: "#/components/schemas/Currency"
         description:
           type: string
           nullable: true
           example: description
         buyer:
-          $ref: '#/components/schemas/BuyerResponse'
+          $ref: "#/components/schemas/BuyerResponse"
         shipping_address:
-          $ref: '#/components/schemas/ShippingAddressResponse'
+          $ref: "#/components/schemas/ShippingAddressResponse"
         order:
-          $ref: '#/components/schemas/OrderPaymentUpdate'
+          $ref: "#/components/schemas/OrderPaymentUpdate"
         captures:
           type: array
           nullable: true
           readOnly: true
           items:
-            $ref: '#/components/schemas/CaptureResponse'
+            $ref: "#/components/schemas/CaptureResponse"
         refunds:
           type: array
           nullable: true
           readOnly: true
           items:
-            $ref: '#/components/schemas/RefundResponse'
+            $ref: "#/components/schemas/RefundResponse"
         buyer_history:
-          $ref: '#/components/schemas/BuyerHistoryResponse'
+          $ref: "#/components/schemas/BuyerHistoryResponse"
         order_history:
           type: array
           nullable: true
-          description: >-
-            Array of objects, should contain information on 5-10 previously
-            placed via any payment method orders in any status, current order
-            excluded.
+          description: Array of objects, should contain information on 5-10 previously placed via any payment method orders in any status, current order excluded.
           items:
-            $ref: '#/components/schemas/OrderHistoryResponse'
+            $ref: "#/components/schemas/OrderHistoryResponse"
         meta:
-          $ref: '#/components/schemas/Meta'
+          $ref: "#/components/schemas/Meta"
         attachment:
-          $ref: '#/components/schemas/Attachment_V1'
+          $ref: "#/components/schemas/Attachment_V1"
       required:
         - amount
         - currency
@@ -3640,10 +3637,8 @@ components:
       properties:
         amount:
           type: string
-          default: '0.00'
-          description: >-
-            Amount refunded. Allows to send up to 2 decimals for AED and SAR, up
-            to 3 decimals for KWD.
+          default: "0.00"
+          description: Amount refunded. Allows to send up to 2 decimals for AED and SAR, up to 3 decimals for KWD.
         reference_id:
           type: string
           example: refund idempotency key
@@ -3655,7 +3650,7 @@ components:
         items:
           type: array
           items:
-            $ref: '#/components/schemas/OrderItem'
+            $ref: "#/components/schemas/OrderItem"
           description: Array of objects representing the order items being refunded.
       required:
         - amount
@@ -3666,21 +3661,17 @@ components:
         id:
           type: string
           format: uuid
-          example: refund id, uuid format
+          example: "refund id, uuid format"
           readOnly: true
           description: Unique refund ID, assigned by Tabby.
         created_at:
           type: string
           format: date-time
-          description: >-
-            Date and time the refund was created, in UTC, and displayed in ISO
-            8601 datetime format, assigned by Tabby.
+          description: Date and time the refund was created, in UTC, and displayed in ISO 8601 datetime format, assigned by Tabby.
         amount:
           type: string
-          default: '0.00'
-          description: >-
-            Amount refunded. Allows to send up to 2 decimals for AED and SAR, up
-            to 3 decimals for KWD.
+          default: "0.00"
+          description: Amount refunded. Allows to send up to 2 decimals for AED and SAR, up to 3 decimals for KWD.
         reason:
           type: string
           nullable: true
@@ -3690,7 +3681,7 @@ components:
           type: array
           nullable: true
           items:
-            $ref: '#/components/schemas/OrderItemResponse'
+            $ref: "#/components/schemas/OrderItemResponse"
           description: Array of objects representing the order items being refunded.
         reference_id:
           type: string
@@ -3713,7 +3704,7 @@ components:
           description: Building name, apartment number.
         zip:
           type: string
-          example: '1111'
+          example: "1111"
           description: Postal code.
       required:
         - city
@@ -3736,7 +3727,7 @@ components:
         zip:
           type: string
           nullable: true
-          example: '1111'
+          example: "1111"
           description: Postal code.
       required:
         - city
@@ -3766,17 +3757,12 @@ components:
           type: boolean
           default: true
           deprecated: true
-          description: >-
-            Deprecated. The webhook environment is determined by the secret key
-            used at registration (production `sk_...` or test `sk_test_...`),
-            not by this field.
+          description: Deprecated. The webhook environment is determined by the secret key used at registration (production `sk_...` or test `sk_test_...`), not by this field.
         url:
           type: string
           format: uri
-          example: https://example.com/
-          description: >-
-            HTTPS endpoint for notifications. The URL should be valid and
-            accessible (not local).
+          example: "https://example.com/"
+          description: HTTPS endpoint for notifications. The URL should be valid and accessible (not local).
       required:
         - url
         - is_test
@@ -3793,10 +3779,8 @@ components:
         url:
           type: string
           format: uri
-          example: https://example.com/
-          description: >-
-            HTTPS endpoint for notifications. The URL should be valid and
-            accessible (not local).
+          example: "https://example.com/"
+          description: HTTPS endpoint for notifications. The URL should be valid and accessible (not local).
         header:
           type: object
           properties:
@@ -3836,23 +3820,18 @@ components:
           type: boolean
           default: false
           deprecated: true
-          description: >-
-            Deprecated. The webhook environment is determined by the secret key
-            used at registration (production `sk_...` or test `sk_test_...`),
-            not by this field.
+          description: Deprecated. The webhook environment is determined by the secret key used at registration (production `sk_...` or test `sk_test_...`), not by this field.
         url:
           type: string
           format: uri
-          example: https://example.com/
-          description: >-
-            HTTPS endpoint for notifications. The URL should be valid and
-            accessible (not local).
+          example: "https://example.com/"
+          description: HTTPS endpoint for notifications. The URL should be valid and accessible (not local).
       required:
         - url
         - is_test
     WebhookResponseAll:
       oneOf:
-        - $ref: '#/components/schemas/Webhook'
+        - $ref: "#/components/schemas/Webhook"
         - description: If no webhooks are registered - `null` will be returned.
     WebhookUpdate:
       type: object
@@ -3876,13 +3855,69 @@ components:
         url:
           type: string
           format: uri
-          example: https://example-updated.com/
-          description: >-
-            HTTPS endpoint for notifications. The URL should be valid and
-            accessible (not local).
+          example: "https://example-updated.com/"
+          description: HTTPS endpoint for notifications. The URL should be valid and accessible (not local).
       required:
         - url
         - id
+    DisputeWebhookRequest:
+      type: object
+      properties:
+        url:
+          type: string
+          format: uri
+          example: "https://example.com/tabby/dispute-webhook"
+          description: Endpoint for dispute notifications (HTTPS recommended). Must be an absolute URL with a publicly resolvable host name — `localhost`, raw IP addresses and hosts that do not resolve are rejected. Normalised before it is stored (lower-case scheme and host, default port and trailing slash removed) and unique per merchant.
+        header:
+          type: object
+          description: Optional static header Tabby adds to every notification so you can verify its origin. Omit it on `PUT` to remove the header.
+          properties:
+            title:
+              type: string
+              example: X-Auth-Key
+              description: Header name (an HTTP token, up to 128 characters).
+            value:
+              type: string
+              example: your_random_signing_secret
+              description: Header value (up to 1024 characters). Treated as a secret — every response returns it masked.
+          required:
+            - title
+            - value
+      required:
+        - url
+    DisputeWebhook:
+      type: object
+      properties:
+        id:
+          type: string
+          readOnly: true
+          example: f5eb7c26-b163-4fad-b75f-66024824116e
+          description: Unique dispute webhook ID, assigned by Tabby.
+        url:
+          type: string
+          format: uri
+          example: "https://example.com/tabby/dispute-webhook"
+          description: Endpoint for dispute notifications, as stored (normalised).
+        header:
+          type: object
+          nullable: true
+          description: The signing header, if one was registered. `value` is masked.
+          properties:
+            title:
+              type: string
+              example: X-Auth-Key
+            value:
+              type: string
+              example: "****cret"
+              description: Masked — `****` followed by the last 4 characters of the stored value; `****` alone when the value has 8 characters or fewer.
+      required:
+        - id
+        - url
+    DisputeWebhookAll:
+      type: array
+      description: All dispute webhooks of the merchant. Empty array when none are registered.
+      items:
+        $ref: "#/components/schemas/DisputeWebhook"
     Error_400:
       type: object
       properties:
@@ -3930,7 +3965,7 @@ components:
           example: bad_data
         error:
           type: string
-          example: 'could not create payment: only ''AED'' is supported, but got ''SAR'''
+          example: "could not create payment: only 'AED' is supported, but got 'SAR'"
     Error_400_PaymentsGet:
       type: object
       properties:
@@ -4023,7 +4058,7 @@ components:
           example: not_authorized
         error:
           type: string
-          example: 'auth: provided key doesn''t exist'
+          example: "auth: provided key doesn't exist"
     Error_401_merchantNull:
       type: object
       properties:
@@ -4072,6 +4107,30 @@ components:
         error:
           type: string
           example: dispute not found
+    Error_404_no_session:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        errorType:
+          type: string
+          example: not_found
+        error:
+          type: string
+          example: no session
+    Error_400_invalid_session_id:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        errorType:
+          type: string
+          example: bad_data
+        error:
+          type: string
+          example: sessionID must be a valid UUID
     Error_404_no_such_payment:
       type: object
       properties:
@@ -4096,6 +4155,30 @@ components:
         error:
           type: string
           example: no such webhook
+    Error_403_no_test_mode:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        errorType:
+          type: string
+          example: no_permission
+        error:
+          type: string
+          example: disputes have no test mode
+    Error_404_webhook_not_found:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        errorType:
+          type: string
+          example: not_found
+        error:
+          type: string
+          example: webhook not found
     Error_409:
       type: object
       properties:
@@ -4108,20 +4191,53 @@ components:
         error:
           type: string
           example: payment is disputed
+    Error_409_locked:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        errorType:
+          type: string
+          example: conflict
+        error:
+          type: string
+          example: "could not acquire lock: payment is locked"
     Error_500:
-      type: string
-      example: Internal Server error
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        errorType:
+          type: string
+          example: internal
+        error:
+          type: string
+          example: Internal Server Error
+    Error_500_internal:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        errorType:
+          type: string
+          example: internal
+        error:
+          type: string
+          example: internal
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
-      description: >
-        Bearer authentication header of the form `Bearer <secret_key>`, where
-        `<secret_key>` is your `secret_key`.
+      description: |
+        Bearer authentication header of the form `Bearer <secret_key>`, where `<secret_key>` is your `secret_key`.
 x-tagGroups:
   - name: API
     tags:
       - Checkout
       - Payments
       - Webhooks
+      - Dispute webhooks
       - Disputes

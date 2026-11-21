@@ -193,7 +193,7 @@ Add `admin({ isAuthorized })` to `use` to enable financial operations. Supply yo
 
 Use stable `merchantReferenceId` values for capture and amount-bearing cancellation, and `merchantRefundId` values for refund. Reusing a reference with different input returns 409.
 
-With persistence enabled, the plugin saves checkout results and financial commands before retrying them. An uncertain provider outcome can leave a command pending and block new mutations on that order. Verify upstream state before operator recovery; pending commands do not expire automatically, and reconciliation alone does not clear them.
+With persistence enabled, the plugin saves checkout results and financial commands before retrying them. A definitive rejection releases its reservation so the order accepts the next command: validation that fails before the request, or the provider refusing the mutation itself (a 4xx other than 408, 409, 425, 429 or 499, or a documented refusal 409). Errors from later reads never count. Custom providers mark refusals with `rejected: true`. An uncertain provider outcome can leave a command pending and block new mutations on that order. Verify upstream state before operator recovery; pending commands do not expire automatically, and reconciliation alone does not clear them.
 
 See the [admin examples](./docs/integration.md#admin) and [recovery behavior](./docs/integration.md#at-least-once-processing).
 

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { BnplProviderError } from "../../core/errors";
+import { BnplPluginError, BnplProviderError } from "../../core/errors";
 import { isOneOf, isRecord, readStringField } from "../../core/guards";
 import { formatAmount, isBnplCurrency, parseAmount } from "../../core/money";
 import type { CanonicalStatus } from "../../core/status";
@@ -60,7 +60,8 @@ function readPaymentRecords(value: unknown): TabbyCaptureRecord[] {
 }
 export function toTabbyBuyer(buyer: BnplBuyer): TabbyBuyer {
 	const fullName = `${buyer.firstName} ${buyer.lastName}`.trim();
-	if (!fullName) throw new BnplProviderError(PROVIDER_ID, "buyer name is required by Tabby");
+	if (!fullName)
+		throw new BnplProviderError(PROVIDER_ID, "buyer name is required by Tabby", { rejected: true });
 	return {
 		name: fullName,
 		email: buyer.email,
@@ -78,16 +79,21 @@ export function toTabbyShippingAddress(addr: BnplAddress): TabbyShippingAddress 
 }
 export function toTabbyItem(item: BnplOrderItem): TabbyOrderItem {
 	if (!Number.isSafeInteger(item.quantity) || item.quantity <= 0) {
-		throw new BnplProviderError("tabby", "item quantity must be a positive safe integer");
+		throw new BnplProviderError("tabby", "item quantity must be a positive safe integer", {
+			rejected: true,
+		});
 	}
 	const totalMinor = parseAmount(item.totalAmount);
 	if (item.unitPrice && item.unitPrice.currency !== item.totalAmount.currency) {
-		throw new BnplProviderError("tabby", "item unit price currency differs from line total");
+		throw new BnplProviderError("tabby", "item unit price currency differs from line total", {
+			rejected: true,
+		});
 	}
 	if (!item.unitPrice && totalMinor % item.quantity !== 0) {
 		throw new BnplProviderError(
 			"tabby",
 			"item line total cannot be divided exactly; provide unitPrice",
+			{ rejected: true },
 		);
 	}
 	const unitPrice = item.unitPrice
@@ -140,7 +146,13 @@ export function toTabbyCheckoutRequest(
 	for (const money of amounts) {
 		if (!money) continue;
 		if (money.currency !== input.totalAmount.currency)
-			throw new BnplProviderError("tabby", "checkout money currency differs from payment currency");
+			throw new BnplProviderError(
+				"tabby",
+				"checkout money currency differs from payment currency",
+				{
+					rejected: true,
+				},
+			);
 		parseAmount(money);
 	}
 	const lang = input.locale?.startsWith("ar") ? "ar" : "en";
@@ -149,7 +161,14 @@ export function toTabbyCheckoutRequest(
 			? undefined
 			: tabbyCheckoutDataSchema.safeParse(input.providerData);
 	if (providerData && !providerData.success) {
-		throw new Error("tabby: checkout providerData is invalid");
+		throw new BnplPluginError(
+			"PROVIDER_NOT_AVAILABLE",
+			"tabby: checkout providerData is invalid",
+			undefined,
+			{
+				rejected: true,
+			},
+		);
 	}
 	return {
 		payment: {
@@ -224,7 +243,7 @@ export function tabbyStatusToCanonical(
 	}
 }
 export function sumCapturesMinor(
-	records: TabbyCaptureRecord[] | undefined,
+	records: TabbyCaptureRecord[] | null | undefined,
 	currency: string,
 	logger: {
 		warn: (msg: string) => void;
@@ -233,7 +252,7 @@ export function sumCapturesMinor(
 	return sumAmountRecordsMinor(records, "capture", currency, logger);
 }
 export function sumRefundsMinor(
-	records: TabbyRefundRecord[] | undefined,
+	records: TabbyRefundRecord[] | null | undefined,
 	currency: string,
 	logger: {
 		warn: (msg: string) => void;
@@ -242,7 +261,7 @@ export function sumRefundsMinor(
 	return sumAmountRecordsMinor(records, "refund", currency, logger);
 }
 function sumAmountRecordsMinor(
-	records: readonly TabbyAmountRecord[] | undefined,
+	records: readonly TabbyAmountRecord[] | null | undefined,
 	recordKind: "capture" | "refund",
 	currency: string,
 	logger: {

@@ -327,7 +327,7 @@ describe("Tabby cancellation closure aliases", () => {
 		expect((await cancel("", "")).error?.status).toBe(409);
 		expect(post).not.toHaveBeenCalled();
 	});
-	it("rejects stale remote closure totals before completing the journal", async () => {
+	it("rejects stale remote closure totals without completing or retaining the unsent command", async () => {
 		const { row, cancel, post } = await setup(undefined, {
 			id: "tabby",
 			fetchOrder: async () => ({
@@ -342,7 +342,7 @@ describe("Tabby cancellation closure aliases", () => {
 		expect(post).not.toHaveBeenCalled();
 		expect(row.capturedAmountMinor).toBe(2500);
 		expect(row.status).toBe("closed");
-		expect(JSON.parse(String(row.moneyCommands))[0].state).toBe("pending");
+		expect(JSON.parse(String(row.moneyCommands))).toEqual([]);
 	});
 	it("checks financial freshness against the latest row during completion", async () => {
 		const updateRow = () => {
@@ -364,6 +364,6 @@ describe("Tabby cancellation closure aliases", () => {
 		expect((await cancel("", "")).error?.status).toBe(409);
 		expect(post).not.toHaveBeenCalled();
 		expect(row.capturedAmountMinor).toBe(2500);
-		expect(JSON.parse(String(row.moneyCommands))[0].state).toBe("pending");
+		expect(JSON.parse(String(row.moneyCommands))).toEqual([]);
 	});
 });

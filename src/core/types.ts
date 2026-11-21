@@ -159,6 +159,7 @@ export interface BnplAuthorizeResult {
 	autoCaptured?: boolean;
 	captureId?: string;
 	capturedAmountMinor?: number;
+	capturedCurrency?: BnplCurrency;
 	raw: unknown;
 }
 export interface BnplOrderState {

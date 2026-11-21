@@ -1,16 +1,28 @@
 import { z } from "zod";
-import { BNPL_CURRENCIES, DECIMAL_PATTERN } from "../core/money";
+import { BNPL_CURRENCIES, DECIMAL_PATTERN, parseAmount } from "../core/money";
 import { absoluteUrlMax1024Schema } from "../core/url";
-export const moneySchema = z.object({
-	amount: z
-		.union([z.string(), z.number()])
-		.transform((v) => (typeof v === "number" ? String(v) : v))
-		.refine((v) => DECIMAL_PATTERN.test(v), {
-			message:
-				'amount must be a canonical decimal string (e.g. "100.00") — no separators, sign, or scientific notation',
-		}),
-	currency: z.enum(BNPL_CURRENCIES),
-});
+export const moneySchema = z
+	.object({
+		amount: z
+			.union([z.string(), z.number()])
+			.transform((v) => (typeof v === "number" ? String(v) : v))
+			.refine((v) => DECIMAL_PATTERN.test(v), {
+				message:
+					'amount must be a canonical decimal string (e.g. "100.00") — no separators, sign, or scientific notation',
+			}),
+		currency: z.enum(BNPL_CURRENCIES),
+	})
+	.superRefine((money, ctx) => {
+		try {
+			parseAmount(money);
+		} catch (error) {
+			ctx.addIssue({
+				code: z.ZodIssueCode.custom,
+				path: ["amount"],
+				message: error instanceof Error ? error.message : "amount is invalid for its currency",
+			});
+		}
+	});
 export const localeSchema = z.enum(["en", "ar", "en_US", "ar_SA"]);
 export const addressSchema = z.object({
 	firstName: z.string().optional(),

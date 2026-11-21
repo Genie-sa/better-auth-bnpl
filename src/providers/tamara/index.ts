@@ -1,5 +1,5 @@
 import { BnplPluginError, BnplProviderError } from "../../core/errors";
-import { isMoneyLike, isOneOf } from "../../core/guards";
+import { isMoneyLike, isOneOf, isRecord } from "../../core/guards";
 import { parseJsonObject } from "../../core/json";
 import { type BnplCurrency, formatAmount, isBnplCurrency, parseAmount } from "../../core/money";
 import type {
@@ -80,6 +80,8 @@ function requireTamaraShippingInfo(value: BnplCaptureArgs["shippingInfo"]): Tama
 		throw new BnplPluginError(
 			"SHIPPING_INFO_REQUIRED",
 			"tamara: capture requires `shippingInfo.shippedAt` and `shippingInfo.shippingCompany` because Tamara's capture API requires shipping_info.shipped_at and shipping_info.shipping_company",
+			undefined,
+			{ rejected: true },
 		);
 	}
 	const shippedAt = value?.shippedAt?.trim();
@@ -95,8 +97,11 @@ function requireTamaraShippingInfo(value: BnplCaptureArgs["shippingInfo"]): Tama
 	throw new BnplPluginError(
 		"SHIPPING_INFO_REQUIRED",
 		"tamara: capture requires `shippingInfo.shippedAt` and `shippingInfo.shippingCompany` because Tamara's capture API requires shipping_info.shipped_at and shipping_info.shipping_company",
+		undefined,
+		{ rejected: true },
 	);
 }
+const TAMARA_CANCEL_STATUSES = ["updated", "canceled"] as const;
 function requireTamaraCancelAmount(
 	value: BnplCancelArgs["totalAmount"],
 ): NonNullable<BnplCancelArgs["totalAmount"]> {
@@ -104,6 +109,8 @@ function requireTamaraCancelAmount(
 	throw new BnplPluginError(
 		"TOTAL_AMOUNT_REQUIRED",
 		"tamara: cancel requires `totalAmount` because Tamara's cancel API requires total_amount",
+		undefined,
+		{ rejected: true },
 	);
 }
 export function tamara(
@@ -124,6 +131,21 @@ export function tamara(
 		fetch: options.fetch,
 		timeoutMs: options.preCheckTimeoutMs ?? 200,
 	});
+	/** The mutation was accepted, so a failed read must stay uncertain rather than look like a rejection. */
+	async function readStateAfterDispatch(
+		providerOrderId: string,
+		response: unknown,
+	): Promise<BnplOrderState> {
+		try {
+			return readTamaraOrderState(await client.getOrder(providerOrderId), providerOrderId);
+		} catch (cause) {
+			throw new BnplProviderError(
+				"tamara",
+				"Tamara accepted the operation but its order could not be read to corroborate it",
+				{ body: response, cause },
+			);
+		}
+	}
 	return {
 		id: "tamara",
 		display,
@@ -217,10 +239,7 @@ export function tamara(
 				response,
 			);
 			if (amountMinor !== requestedMinor) {
-				const snapshot = readTamaraOrderState(
-					await client.getOrder(providerOrderId),
-					providerOrderId,
-				);
+				const snapshot = await readStateAfterDispatch(providerOrderId, response);
 				const refund = snapshot.operations?.find(
 					(operation) => operation.kind === "refunded" && operation.id === response.refund_id,
 				);
@@ -261,13 +280,21 @@ export function tamara(
 				response,
 			);
 			if (amountMinor !== requestedMinor) {
-				const snapshot = readTamaraOrderState(
-					await client.getOrder(providerOrderId),
-					providerOrderId,
-				);
+				const snapshot = await readStateAfterDispatch(providerOrderId, response);
 				const cancellation = snapshot.operations?.find(
 					(operation) => operation.kind === "canceled" && operation.id === response.cancel_id,
 				);
+				if (
+					amountMinor === 0 &&
+					!isOneOf(response.status, TAMARA_CANCEL_STATUSES) &&
+					snapshot.status !== "canceled" &&
+					reportsCancellationHistory(snapshot) &&
+					!cancellation
+				)
+					throw new BnplProviderError("tamara", "Tamara did not apply the cancellation", {
+						body: response,
+						rejected: true,
+					});
 				if (
 					!cancellation ||
 					cancellation.amountMinor !== requestedMinor ||
@@ -280,6 +307,12 @@ export function tamara(
 					);
 				amountMinor = cancellation.amountMinor;
 			}
+			if (!isOneOf(response.status, TAMARA_CANCEL_STATUSES))
+				throw new BnplProviderError(
+					"tamara",
+					`Tamara cancellation returned unexpected status: ${response.status}`,
+					{ body: response },
+				);
 			return {
 				providerOrderId: response.order_id,
 				status: response.status,
@@ -387,6 +420,12 @@ export function tamara(
 		},
 	};
 }
+function reportsCancellationHistory(snapshot: BnplOrderState): boolean {
+	const native = snapshot.raw;
+	return (
+		isRecord(native) && isRecord(native.transactions) && Array.isArray(native.transactions.cancels)
+	);
+}
 function assertResponseOrderId(actual: string, expected: string, body: unknown): void {
 	if (actual !== expected)
 		throw new BnplProviderError("tamara", "Tamara returned a different order ID", { body });
@@ -430,7 +469,10 @@ function readOperationAmount(
 function readTamaraAutoCapture(
 	response: TamaraAuthoriseResponse,
 	status: BnplAuthorizeResult["status"],
-): Pick<BnplAuthorizeResult, "autoCaptured" | "captureId" | "capturedAmountMinor"> {
+): Pick<
+	BnplAuthorizeResult,
+	"autoCaptured" | "captureId" | "capturedAmountMinor" | "capturedCurrency"
+> {
 	const autoCaptured = response.auto_captured === true || status === "fully_captured";
 	if (!autoCaptured) return {};
 	const captureId = typeof response.capture_id === "string" ? response.capture_id : undefined;
@@ -447,10 +489,13 @@ function readTamaraAutoCapture(
 		"authorized_amount",
 		response,
 	);
+	const authorized = response.authorized_amount;
+	const currency = isMoneyLike(authorized) ? authorized.currency : undefined;
 	return {
 		autoCaptured: true,
 		captureId,
 		capturedAmountMinor,
+		...(currency !== undefined && isBnplCurrency(currency) ? { capturedCurrency: currency } : {}),
 	};
 }
 export { TamaraClient } from "./client";

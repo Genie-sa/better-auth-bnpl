@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import { isRecord } from "../../core/guards";
 import type { ProviderFetch } from "../../core/provider";
 import { type ProviderHttpMethod, type SleepFn, requestProviderJson } from "../http";
 import { createOpenApiPathBuilder } from "../openapi-path";
@@ -105,6 +106,7 @@ export class TabbyClient {
 			bodySchema,
 			schema,
 			label,
+			isRejectedConflict: isDocumentedConflict,
 			timeoutMs: this.timeoutMs,
 			sleep: this.sleep,
 		});
@@ -250,4 +252,10 @@ export class TabbyClient {
 			},
 		});
 	}
+}
+const DOCUMENTED_CONFLICTS = ["could not acquire lock: payment is locked", "payment is disputed"];
+function isDocumentedConflict(body: unknown): boolean {
+	return (
+		isRecord(body) && typeof body.error === "string" && DOCUMENTED_CONFLICTS.includes(body.error)
+	);
 }

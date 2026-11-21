@@ -271,7 +271,7 @@ export const tamaraCancelResponseSchema = z
 	.object({
 		order_id: nonEmptyStringSchema,
 		cancel_id: nonEmptyStringSchema,
-		status: z.enum(["updated", "canceled"]),
+		status: nonEmptyStringSchema,
 		canceled_amount: tamaraMoneySchema,
 	})
 	.passthrough();

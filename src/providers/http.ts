@@ -7,6 +7,7 @@ export const DEFAULT_PROVIDER_TIMEOUT_MS = 15000;
 const MAX_GET_RETRIES = 2;
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 const BASE_BACKOFF_MS = 250;
+const UNCERTAIN_CLIENT_ERROR_STATUSES: ReadonlySet<number> = new Set([408, 409, 425, 429, 499]);
 export type SleepFn = (ms: number) => Promise<void>;
 const realSleep: SleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 type ProviderBody<TSchema extends z.ZodTypeAny | undefined> = TSchema extends z.ZodTypeAny
@@ -25,6 +26,8 @@ interface ProviderRequest<TBodySchema extends z.ZodTypeAny | undefined = undefin
 	label?: string;
 	timeoutMs?: number;
 	sleep?: SleepFn;
+	/** Provider-documented 409 bodies that prove a mutation was refused rather than conflicting with an in-flight one. */
+	isRejectedConflict?: (body: unknown) => boolean;
 }
 interface ProviderJsonRequest<
 	TResponseSchema extends z.ZodTypeAny,
@@ -35,6 +38,15 @@ interface ProviderJsonRequest<
 }
 function isRetryableMethod(method: ProviderHttpMethod): boolean {
 	return method === "GET";
+}
+function isRejectedMutationResponse(
+	request: Pick<ProviderRequest, "method" | "isRejectedConflict">,
+	status: number,
+	body: unknown,
+): boolean {
+	if (isRetryableMethod(request.method) || status < 400 || status >= 500) return false;
+	if (status === 409) return request.isRejectedConflict?.(body) === true;
+	return !UNCERTAIN_CLIENT_ERROR_STATUSES.has(status);
 }
 function isTimeoutError(err: unknown): boolean {
 	return err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
@@ -71,6 +83,7 @@ async function requestProviderRaw<TBodySchema extends z.ZodTypeAny | undefined =
 		throw new BnplProviderError(
 			provider,
 			"provider timeout must be a positive integer within the timer range",
+			{ rejected: true },
 		);
 	}
 	const deadline = Date.now() + timeoutMs;
@@ -103,6 +116,7 @@ async function requestProviderRaw<TBodySchema extends z.ZodTypeAny | undefined =
 				headers,
 				body: serializedBody,
 				signal,
+				redirect: isRetryableMethod(method) ? "follow" : "manual",
 			});
 			const text = await res.text();
 			const parsed = text ? safeJsonParse(text) : null;
@@ -110,9 +124,11 @@ async function requestProviderRaw<TBodySchema extends z.ZodTypeAny | undefined =
 				const message =
 					extractProviderErrorMessage(parsed) ??
 					(res.statusText || `${providerName} ${what} failed`);
+				const errorBody = parsed ?? text;
 				const error = new BnplProviderError(provider, message, {
 					status: res.status,
-					body: parsed ?? text,
+					body: errorBody,
+					rejected: isRejectedMutationResponse(request, res.status, errorBody),
 				});
 				if (attempt + 1 < maxAttempts && RETRYABLE_STATUS.has(res.status)) {
 					const delay =
@@ -202,6 +218,7 @@ function serializeProviderRequestBody({
 			{
 				body,
 				cause: result.error,
+				rejected: true,
 			},
 		);
 	}

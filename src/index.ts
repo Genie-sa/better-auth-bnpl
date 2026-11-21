@@ -18,6 +18,7 @@ export {
 	BnplProviderError,
 	isBnplPluginError,
 	isBnplProviderError,
+	isDefinitiveRejection,
 } from "./core/errors";
 export {
 	BNPL_CURRENCIES,

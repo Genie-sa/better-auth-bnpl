@@ -194,8 +194,8 @@ export interface operations {
 					discount?: {
 						name: string;
 						amount: {
-							amount?: number;
-							currency?: "SAR" | "AED" | "BHD" | "KWD" | "OMR";
+							amount: number;
+							currency: "SAR" | "AED";
 						};
 					};
 					items: {
@@ -259,30 +259,23 @@ export interface operations {
 					platform?: string;
 					is_mobile?: boolean;
 					locale?: "ar_SA" | "en_US";
-					risk_assessment?: {
-						customer_age?: number;
-						customer_dob?: string;
-						customer_gender?: "Male" | "Female";
-						customer_nationality?: string;
-						is_premium_customer?: boolean;
-						is_existing_customer?: boolean;
-						is_guest_user?: boolean;
-						account_creation_date?: string;
-						platform_account_creation_date?: string;
-						date_of_first_transaction?: string;
-						is_card_on_file?: boolean;
-						is_COD_customer?: boolean;
-						has_delivered_order?: boolean;
-						is_phone_verified?: boolean;
-						is_fraudulent_customer?: boolean;
-						total_ltv?: number;
-						total_order_count?: number;
-						order_amount_last3months?: number;
-						order_count_last3months?: number;
-						last_order_date?: string;
-						last_order_amount?: number;
-						reward_program_enrolled?: boolean;
-						reward_program_points?: number;
+					risk_assessment: {
+						is_premium_customer: boolean;
+						account_creation_date: string;
+						total_order_count: number;
+						risk_score?: number;
+						date_first_paid: string;
+						date_last_paid: string;
+						order_count_last_24h?: number;
+						account_security?: {
+							is_email_verified?: boolean;
+							is_phone_verified?: boolean;
+							password_last_changed?: string;
+							last_login_date?: string;
+							last_verification_method?: string;
+							device_id?: string;
+							devices_linked?: number;
+						};
 					};
 					expires_in_minutes?: number;
 					additional_data?: {
@@ -645,7 +638,8 @@ export interface operations {
 						currency?: "SAR" | "AED" | "BHD" | "KWD" | "OMR";
 					};
 					customer: {
-						phone?: string;
+						phone_number?: string;
+						email?: string;
 					};
 				};
 			};

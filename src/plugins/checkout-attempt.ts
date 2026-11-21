@@ -123,10 +123,11 @@ export async function updateCheckoutAttempt(
 		() => [{ field: "id", value: row.id }],
 		(current) => {
 			const attempt = readCheckoutAttempt(current, hash);
+			const recordsFirstResult = update.result !== undefined && attempt.result === undefined;
 			if (
 				!token ||
 				attempt.processingToken !== token ||
-				(attempt.processingUntil ?? 0) <= Date.now()
+				(!recordsFirstResult && (attempt.processingUntil ?? 0) <= Date.now())
 			)
 				conflict("Checkout integration claim was lost");
 			return {
@@ -172,4 +173,26 @@ export async function releaseCheckoutClaim(
 			};
 		},
 	);
+}
+
+export async function discardRejectedCheckoutReservation(
+	ctx: GenericEndpointContext,
+	row: CheckoutOrder,
+	hash: string,
+): Promise<void> {
+	const token = readCheckoutAttempt(row, hash).processingToken;
+	const current = await ctx.context.adapter.findOne<CheckoutOrder>({
+		model: "bnplOrder",
+		where: [{ field: "id", value: row.id }],
+	});
+	if (!current || !token) return;
+	const attempt = readCheckoutAttempt(current, hash);
+	if (attempt.result || attempt.processingToken !== token) return;
+	await ctx.context.adapter.delete({
+		model: "bnplOrder",
+		where: [
+			{ field: "id", value: row.id },
+			{ field: "version", value: current.version ?? 0 },
+		],
+	});
 }

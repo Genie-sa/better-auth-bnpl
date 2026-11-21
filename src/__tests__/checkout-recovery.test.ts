@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { bnpl } from "../plugin";
 import { type CheckoutSubpluginOptions, checkout } from "../plugins/checkout";
 import { makeBnplTestInstance, stubProvider } from "./_harness";
@@ -208,5 +208,62 @@ describe("persisted checkout recovery", () => {
 		});
 		expect((await post()).error).not.toBeNull();
 		expect(createCheckout).not.toHaveBeenCalled();
+	});
+});
+
+describe("checkout claim lease", () => {
+	afterEach(() => vi.useRealTimers());
+	it("records the provider result when the owning worker resumes after its lease expired", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const createCheckout = vi.fn(async () => {
+			vi.setSystemTime(Date.now() + 6 * 60 * 1000);
+			return {
+				providerOrderId: "slow-order",
+				providerCheckoutId: "slow-session",
+				checkoutUrl: "https://provider.example/checkout" as const,
+				status: "new" as const,
+				raw: {},
+			};
+		});
+		const instance = await makeBnplTestInstance([
+			bnpl({
+				providers: { tabby: stubProvider("tabby", { createCheckout }) },
+				persistOrders: true,
+				use: [checkout()],
+			}),
+		]);
+		const { headers } = await instance.signInWithTestUser();
+		const post = () =>
+			instance.client.$fetch("/bnpl/checkout", {
+				method: "POST",
+				headers,
+				body: {
+					provider: "tabby",
+					orderReferenceId: "slow-ref",
+					description: "Test",
+					countryCode: "SA",
+					buyer: {
+						firstName: "Test",
+						lastName: "Buyer",
+						email: "buyer@example.test",
+						phone: "+966500000001",
+					},
+					totalAmount: { amount: "100.00", currency: "SAR" },
+					items: [
+						{
+							referenceId: "item",
+							name: "Test",
+							sku: "item",
+							quantity: 1,
+							totalAmount: { amount: "100.00", currency: "SAR" },
+						},
+					],
+				},
+			});
+		const first = await post();
+		expect(first.error).toBeNull();
+		expect(instance.db.bnplOrder?.[0]?.providerOrderId).toBe("slow-order");
+		expect((await post()).data).toEqual(first.data);
+		expect(createCheckout).toHaveBeenCalledOnce();
 	});
 });

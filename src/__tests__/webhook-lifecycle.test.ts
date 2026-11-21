@@ -192,7 +192,11 @@ describe("webhook lifecycle", () => {
 			raw: {},
 		}));
 		const capture = vi.fn(async () => {
-			if (failCapture) throw new BnplProviderError("tabby", "capture unavailable", { status: 400 });
+			if (failCapture)
+				throw new BnplProviderError("tabby", "capture unavailable", {
+					status: 400,
+					rejected: true,
+				});
 			return {
 				captureId: "approved-retry",
 				providerOrderId: ORDER_ID,
@@ -516,7 +520,8 @@ describe("webhook lifecycle", () => {
 		const references: Array<string | undefined> = [];
 		const capture = vi.fn(async (_orderId: string, args: BnplCaptureArgs) => {
 			references.push(args.merchantReferenceId);
-			if (shouldThrow) throw new BnplProviderError("tabby", "capture boom", { status: 400 });
+			if (shouldThrow)
+				throw new BnplProviderError("tabby", "capture boom", { status: 400, rejected: true });
 			return {
 				captureId: "cap-auto-retry",
 				providerOrderId: ORDER_ID,

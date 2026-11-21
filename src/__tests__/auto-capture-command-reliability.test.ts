@@ -145,7 +145,9 @@ describe("durable automatic capture intent", () => {
 	it("retries a confirmed rejection despite fresh shipping timestamps", async () => {
 		const capture = vi
 			.fn()
-			.mockRejectedValueOnce(new BnplProviderError("tamara", "capture rejected", { status: 400 }))
+			.mockRejectedValueOnce(
+				new BnplProviderError("tamara", "capture rejected", { status: 400, rejected: true }),
+			)
 			.mockResolvedValue(result());
 		const { post, row } = await setup(capture);
 		expect((await post()).error).toBeTruthy();

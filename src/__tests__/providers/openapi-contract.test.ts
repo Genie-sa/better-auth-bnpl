@@ -87,7 +87,8 @@ describe("generated OpenAPI contracts", () => {
 				currency?: "SAR" | "AED" | "BHD" | "KWD" | "OMR";
 			};
 			customer: {
-				phone?: string;
+				phone_number?: string;
+				email?: string;
 			};
 		}>();
 		expectTypeOf<EligibilityResponse>().toMatchTypeOf<{

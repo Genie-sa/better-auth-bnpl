@@ -222,7 +222,7 @@ const tabbyCaptureRecordSchema = z
 		id: nonEmptyStringSchema,
 		amount: z.string(),
 		created_at: z.string().optional(),
-		reference_id: z.string().optional(),
+		reference_id: z.string().nullish(),
 	})
 	.passthrough();
 const tabbyRefundRecordSchema = z
@@ -230,8 +230,8 @@ const tabbyRefundRecordSchema = z
 		id: nonEmptyStringSchema,
 		amount: z.string(),
 		created_at: z.string().optional(),
-		reference_id: z.string().optional(),
-		reason: z.string().optional(),
+		reference_id: z.string().nullish(),
+		reason: z.string().nullish(),
 	})
 	.passthrough();
 export const tabbyPaymentDetailsSchema = z
@@ -241,8 +241,8 @@ export const tabbyPaymentDetailsSchema = z
 		amount: z.string(),
 		currency: z.string(),
 		created_at: z.string().optional(),
-		captures: z.array(tabbyCaptureRecordSchema).optional(),
-		refunds: z.array(tabbyRefundRecordSchema).optional(),
+		captures: z.array(tabbyCaptureRecordSchema).nullish(),
+		refunds: z.array(tabbyRefundRecordSchema).nullish(),
 	})
 	.passthrough();
 const tabbyProductOptionSchema = z
