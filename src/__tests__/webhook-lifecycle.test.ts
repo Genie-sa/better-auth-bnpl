@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { BnplProviderError } from "../core/errors";
+import { readStringField } from "../core/guards";
 import type { BnplCaptureArgs, BnplWebhookEvent } from "../core/types";
 import { bnpl } from "../plugin";
 import { admin } from "../plugins/admin";
@@ -882,6 +883,7 @@ describe("Tamara cancellation notification snapshots", () => {
 			bnpl({
 				providers: {
 					tamara: stubProvider("tamara", {
+						capabilities: { ...stubProvider("tamara").capabilities, partialCancel: true },
 						fetchOrder: get,
 						verifyWebhook: async (req) => ({
 							ok: true,
@@ -893,6 +895,7 @@ describe("Tamara cancellation notification snapshots", () => {
 							kind: "canceled",
 							provider: "tamara",
 							orderId: "tamara-cancel-order",
+							cancelId: readStringField(raw.data, "cancel_id"),
 							raw,
 						}),
 					}),

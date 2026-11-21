@@ -337,6 +337,7 @@ describe("admin order operations", () => {
 						{ id: "close-capture", kind: "captured", amountMinor: 10000, currency: "SAR" },
 						{ id: "close-refund", kind: "refunded", amountMinor: 2500, currency: "SAR" },
 					],
+					closed: true,
 					raw: { status: "CLOSED" },
 				}),
 			});
@@ -366,6 +367,7 @@ describe("admin order operations", () => {
 					operations: [
 						{ id: "close-capture", kind: "captured", amountMinor: 1000, currency: "SAR" },
 					],
+					closed: true,
 					raw: { status: "CLOSED" },
 				}),
 			});
@@ -404,6 +406,29 @@ describe("admin order operations", () => {
 			expect(JSON.parse(String(orderRow(instance).appliedOperations))).toContain(
 				"tamara:cancel:missed-cancel",
 			);
+		});
+		it("derives the refunded status from the reconciled ledger", async () => {
+			const provider = stubProvider("tamara", {
+				fetchOrder: async () => ({
+					providerOrderId: ORDER_ID,
+					status: "fully_captured",
+					totalAmount: { amount: "100.00", currency: "SAR" },
+					capturedAmountMinor: 10000,
+					refundedAmountMinor: 2500,
+					operations: [
+						{ id: "full-capture", kind: "captured", amountMinor: 10000, currency: "SAR" },
+						{ id: "partial-refund", kind: "refunded", amountMinor: 2500, currency: "SAR" },
+					],
+					raw: {},
+				}),
+			});
+			const { instance, headers } = await makeAdminInstance(provider);
+			expect((await post(instance, headers, "reconcile")).error).toBeNull();
+			expect(orderRow(instance)).toMatchObject({
+				capturedAmountMinor: 10000,
+				refundedAmountMinor: 2500,
+				status: "partially_refunded",
+			});
 		});
 		it("syncs the local row from the provider's authoritative state", async () => {
 			const provider = stubProvider("tabby", {

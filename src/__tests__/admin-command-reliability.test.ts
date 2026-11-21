@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { BnplProviderError } from "../core/errors";
 import type { BnplProvider } from "../core/provider";
 import { bnpl } from "../plugin";
 import { admin } from "../plugins/admin";
@@ -178,5 +179,152 @@ describe("durable admin money commands", () => {
 		expect((await instance.post()).error).toBeNull();
 		expect(row.capturedAmountMinor).toBe(6000);
 		expect(capture).toHaveBeenCalledTimes(1);
+	});
+	describe("provider rejection policy", () => {
+		const body = (operation: string, reference: string) => ({
+			totalAmount: { amount: "10.00", currency: "SAR" },
+			[operation === "capture" ? "merchantReferenceId" : "merchantRefundId"]: reference,
+		});
+		it.each([
+			["capture", 400],
+			["capture", 422],
+			["refund", 404],
+		])("frees a %s the provider refused with %i for a retry", async (operation, status) => {
+			const { post, capture, refund, row } = await setup();
+			const request = operation === "capture" ? capture : refund;
+			request.mockRejectedValueOnce(
+				new BnplProviderError("tamara", "refused", { status, rejected: true }),
+			);
+			expect((await post(operation, body(operation, "retry"))).error?.status).toBe(502);
+			expect((await post(operation, body(operation, "retry"))).error).toBeNull();
+			expect(request).toHaveBeenCalledTimes(2);
+			expect(JSON.parse(String(row.moneyCommands))).toEqual([
+				expect.objectContaining({ state: "completed" }),
+			]);
+		});
+		it.each([
+			["capture", 409],
+			["capture", 429],
+			["capture", 503],
+			["refund", 408],
+			["refund", undefined],
+		])("keeps a %s with an uncertain %s outcome pending", async (operation, status) => {
+			const { post, capture, refund } = await setup();
+			const request = operation === "capture" ? capture : refund;
+			request.mockRejectedValueOnce(new BnplProviderError("tamara", "unclear", { status }));
+			expect((await post(operation, body(operation, "unclear"))).error?.status).toBe(502);
+			expect((await post(operation, body(operation, "unclear"))).error?.status).toBe(409);
+			expect((await post(operation, body(operation, "different"))).error?.status).toBe(409);
+			expect(request).toHaveBeenCalledTimes(1);
+		});
+		it("keeps a provider-accepted capture pending when its local write fails", async () => {
+			const { post, capture } = await setup();
+			capture.mockResolvedValueOnce({
+				providerOrderId: "command-order",
+				captureId: "accepted",
+				amountMinor: 999,
+				raw: {},
+			});
+			expect((await post("capture", body("capture", "accepted"))).error?.status).toBe(502);
+			expect((await post("capture", body("capture", "accepted"))).error?.status).toBe(409);
+			expect(capture).toHaveBeenCalledTimes(1);
+		});
+	});
+	describe("pending command recovery", () => {
+		const body = { totalAmount: { amount: "10.00", currency: "SAR" }, merchantReferenceId: "lost" };
+		const remote = (captures: { id: string; amountMinor: number }[]) => ({
+			providerOrderId: "command-order",
+			status: "partially_captured" as const,
+			totalAmount: { amount: "100.00", currency: "SAR" as const },
+			capturedAmountMinor: captures.reduce((sum, capture) => sum + capture.amountMinor, 0),
+			refundedAmountMinor: 0,
+			operations: captures.map((capture) => ({
+				...capture,
+				kind: "captured" as const,
+				currency: "SAR" as const,
+			})),
+			raw: {},
+		});
+		it("completes a lost capture from native history without resending it", async () => {
+			let history = remote([{ id: "earlier", amountMinor: 5000 }]);
+			const { post, capture, row } = await setup({ fetchOrder: async () => history });
+			row.appliedOperations = JSON.stringify(["tamara:captured:earlier"]);
+			capture.mockRejectedValueOnce(new BnplProviderError("tamara", "timeout"));
+			expect((await post("capture", body)).error?.status).toBe(502);
+			history = remote([
+				{ id: "earlier", amountMinor: 5000 },
+				{ id: "landed", amountMinor: 1000 },
+			]);
+			const recovered = await post("capture", body);
+			expect(recovered.error).toBeNull();
+			expect(recovered.data).toMatchObject({ captureId: "landed", amountMinor: 1000 });
+			expect((await post("capture", body)).data).toEqual(recovered.data);
+			expect(capture).toHaveBeenCalledTimes(1);
+			expect(row.capturedAmountMinor).toBe(6000);
+			expect(JSON.parse(String(row.moneyCommands))).toEqual([
+				expect.objectContaining({ state: "completed" }),
+			]);
+		});
+		it("keeps a lost capture pending while native history is ambiguous", async () => {
+			const { post, capture, row } = await setup({
+				fetchOrder: async () =>
+					remote([
+						{ id: "earlier", amountMinor: 5000 },
+						{ id: "one", amountMinor: 1000 },
+						{ id: "two", amountMinor: 1000 },
+					]),
+			});
+			row.appliedOperations = JSON.stringify(["tamara:captured:earlier"]);
+			capture.mockRejectedValueOnce(new BnplProviderError("tamara", "timeout"));
+			await post("capture", body);
+			expect((await post("capture", body)).error).toMatchObject({ status: 409 });
+			expect(capture).toHaveBeenCalledTimes(1);
+			expect(row.capturedAmountMinor).toBe(5000);
+		});
+	});
+	describe("refunds split across captures", () => {
+		const body = { totalAmount: { amount: "30.00", currency: "SAR" }, merchantRefundId: "split" };
+		const split = (amounts: number[]) => ({
+			providerOrderId: "command-order",
+			refundId: "split-1",
+			amountMinor: 3000,
+			operations: amounts.map((amountMinor, index) => ({
+				id: `split-${index + 1}`,
+				kind: "refunded" as const,
+				amountMinor,
+				currency: "SAR" as const,
+			})),
+			raw: {},
+		});
+		it("records every native refund once so their notifications never count again", async () => {
+			const { post, refund, row } = await setup();
+			refund.mockResolvedValueOnce(split([1000, 2000]));
+			expect((await post("refund", body)).error).toBeNull();
+			expect(row.refundedAmountMinor).toBe(3000);
+			expect(JSON.parse(String(row.appliedOperations))).toEqual([
+				"tamara:refunded:split-1",
+				"tamara:refunded:split-2",
+			]);
+		});
+		it("keeps a split refund pending when it repeats an operation identity", async () => {
+			const { post, refund, row } = await setup();
+			const repeated = split([1500, 1500]);
+			const duplicate = {
+				...repeated,
+				operations: repeated.operations.map((operation) => ({ ...operation, id: "split-1" })),
+			};
+			refund.mockResolvedValueOnce(duplicate);
+			expect((await post("refund", body)).error?.status).toBe(502);
+			expect(row.refundedAmountMinor).toBe(0);
+		});
+		it("keeps a split refund pending when its operations do not add up", async () => {
+			const { post, refund, row } = await setup();
+			refund.mockResolvedValueOnce(split([1000, 1500]));
+			expect((await post("refund", body)).error?.status).toBe(502);
+			expect(row.refundedAmountMinor).toBe(0);
+			expect(JSON.parse(String(row.moneyCommands))).toEqual([
+				expect.objectContaining({ state: "pending" }),
+			]);
+		});
 	});
 });

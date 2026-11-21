@@ -1,4 +1,4 @@
-import { isRecord } from "./guards";
+import { brandInstance, isRecord, recogniseBrand } from "./guards";
 import type { BnplMoney } from "./types";
 export const BNPL_CURRENCIES = ["SAR", "AED", "KWD", "BHD", "OMR"] as const;
 export type BnplCurrency = (typeof BNPL_CURRENCIES)[number];
@@ -15,16 +15,19 @@ export type BnplMoneyParseErrorCode =
 	| "UNKNOWN_CURRENCY"
 	| "TOO_MANY_DECIMALS"
 	| "AMOUNT_TOO_LARGE";
+const MONEY_PARSE_ERROR_BRAND = Symbol.for("better-auth-bnpl.BnplMoneyParseError");
 export class BnplMoneyParseError extends Error {
 	readonly code: BnplMoneyParseErrorCode;
 	readonly input: unknown;
 	constructor(code: BnplMoneyParseErrorCode, message: string, input: unknown) {
 		super(message);
+		brandInstance(this, MONEY_PARSE_ERROR_BRAND);
 		this.name = "BnplMoneyParseError";
 		this.code = code;
 		this.input = input;
 	}
 }
+recogniseBrand(BnplMoneyParseError, MONEY_PARSE_ERROR_BRAND);
 export const isBnplCurrency = (currency: string): currency is BnplCurrency =>
 	Object.hasOwn(CURRENCY_MINOR_UNIT_EXPONENT, currency);
 export function parseAmount(money: {

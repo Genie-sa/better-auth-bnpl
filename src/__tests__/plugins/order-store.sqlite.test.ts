@@ -8,8 +8,13 @@ import {
 	reserveCheckoutOrder,
 	updateCheckoutAttempt,
 } from "../../plugins/checkout-attempt";
-import { reserveMoneyCommand, sendReservedCommand } from "../../plugins/money-command";
-import { applyOrderOperation, mutateOrder } from "../../plugins/order-store";
+import {
+	type JournalOperation,
+	type MoneyCommandSpec,
+	runMoneyCommand,
+} from "../../plugins/money-command";
+import { type OrderRecord, applyMoneyOperation } from "../../plugins/order";
+import { mutateOrder } from "../../plugins/order-store";
 import { orders } from "../../plugins/orders";
 import { recordWebhookEvent } from "../../plugins/webhook-events";
 import {
@@ -62,6 +67,27 @@ const ORDER_WHERE = () => [
 	{ field: "provider", value: "tabby" },
 	{ field: "providerOrderId", value: "ord-sqlite" },
 ];
+/** Reserves a command and leaves its outcome unknown, as a crash after dispatch would. */
+function leavePending(
+	ctx: GenericEndpointContext,
+	operation: JournalOperation,
+	reference: string,
+	spec: Partial<MoneyCommandSpec<undefined>> = {},
+) {
+	return runMoneyCommand(
+		ctx,
+		{
+			where: ORDER_WHERE,
+			operation,
+			reference,
+			input: {},
+			onPending: "conflict",
+			replay: (saved) => saved,
+			...spec,
+		},
+		async () => ({}),
+	);
+}
 async function makeSqliteCtx(): Promise<{
 	ctx: GenericEndpointContext;
 	readRow: () => Promise<OrderRow>;
@@ -308,8 +334,8 @@ describe.skipIf(!hasNodeSqlite)("mutateOrder against the real SQLite adapter", (
 	it("reserves only one concurrent order mutation across cancel and capture", async () => {
 		const { ctx, readRow } = await makeSqliteCtx();
 		const outcomes = await Promise.allSettled([
-			reserveMoneyCommand(ctx, ORDER_WHERE, "cancel", "cancel-once", { amountMinor: 2500 }),
-			reserveMoneyCommand(ctx, ORDER_WHERE, "capture", "capture-once", { amountMinor: 1000 }),
+			leavePending(ctx, "cancel", "cancel-once", { input: { amountMinor: 2500 } }),
+			leavePending(ctx, "capture", "capture-once", { input: { amountMinor: 1000 } }),
 		]);
 		expect(outcomes.filter((result) => result.status === "fulfilled")).toHaveLength(1);
 		expect(outcomes.filter((result) => result.status === "rejected")).toHaveLength(1);
@@ -318,61 +344,181 @@ describe.skipIf(!hasNodeSqlite)("mutateOrder against the real SQLite adapter", (
 	});
 	it("blocks changed references and every new mutation while another outcome is uncertain", async () => {
 		const { ctx } = await makeSqliteCtx();
-		await reserveMoneyCommand(ctx, ORDER_WHERE, "capture", "unknown", {});
+		await leavePending(ctx, "capture", "unknown");
 		for (const operation of ["capture", "refund", "cancel", "void", "close", "authorise"] as const)
-			await expect(
-				reserveMoneyCommand(ctx, ORDER_WHERE, operation, "new-reference", {}),
-			).rejects.toThrow();
+			await expect(leavePending(ctx, operation, "new-reference")).rejects.toMatchObject({
+				status: "CONFLICT",
+			});
 	});
 	it("releases a provider-rejected reservation so the next mutation can reserve", async () => {
 		const { ctx, readRow } = await makeSqliteCtx();
-		const first = await reserveMoneyCommand(ctx, ORDER_WHERE, "close", "ord-sqlite", {});
-		if (first.kind !== "reserved") throw new Error("missing reservation");
 		await expect(
-			sendReservedCommand(ctx, ORDER_WHERE, first.command, async () => {
-				throw new BnplProviderError("tabby", "only authorized payments can be closed", {
-					status: 400,
-					rejected: true,
-				});
-			}),
+			runMoneyCommand(
+				ctx,
+				{
+					where: ORDER_WHERE,
+					operation: "close",
+					reference: "ord-sqlite",
+					input: {},
+					onPending: "verify",
+					replay: (saved) => saved,
+				},
+				(command) =>
+					command.send(async () => {
+						throw new BnplProviderError("tabby", "only authorized payments can be closed", {
+							status: 400,
+							rejected: true,
+						});
+					}),
+			),
 		).rejects.toThrow("only authorized payments can be closed");
 		const row = (await readRow()) as OrderRow & { moneyCommands: string };
 		expect(JSON.parse(row.moneyCommands)).toEqual([]);
-		expect((await reserveMoneyCommand(ctx, ORDER_WHERE, "capture", "next", {})).kind).toBe(
-			"reserved",
-		);
+		await expect(leavePending(ctx, "capture", "next")).resolves.toEqual({});
 	});
 	it("retains the cancellation baseline across intervening balance changes and retries", async () => {
 		const { ctx } = await makeSqliteCtx();
-		const first = await reserveMoneyCommand(ctx, ORDER_WHERE, "cancel", "stable", {});
-		expect(first.kind).toBe("reserved");
+		const baselineSpec = { onPending: "verify", recordBaseline: true } as const;
+		await leavePending(ctx, "cancel", "stable", baselineSpec);
 		await mutateOrder(ctx, ORDER_WHERE, () => ({ canceledAmountMinor: 2500 }));
-		const recovered = await reserveMoneyCommand(
+		const recovered = await runMoneyCommand(
 			ctx,
-			ORDER_WHERE,
-			"cancel",
-			"stable",
-			{},
-			undefined,
-			true,
+			{
+				where: ORDER_WHERE,
+				operation: "cancel",
+				reference: "stable",
+				input: {},
+				replay: (saved) => saved,
+				...baselineSpec,
+			},
+			async (command) => ({ state: command.state, baseline: command.baseline }),
 		);
-		if (recovered.kind === "completed") throw new Error("Expected pending intent");
-		expect(recovered.command.before).toMatchObject({
-			capturedAmountMinor: 0,
-			refundedAmountMinor: 0,
-			canceledAmountMinor: 0,
+		expect(recovered).toMatchObject({
+			state: "pending",
+			baseline: { capturedAmountMinor: 0, refundedAmountMinor: 0, canceledAmountMinor: 0 },
 		});
+	});
+	it("frees a definitively rejected reference for one retry and keeps an uncertain one", async () => {
+		const { ctx } = await makeSqliteCtx();
+		const sendFailing = (error: unknown) =>
+			runMoneyCommand(
+				ctx,
+				{
+					where: ORDER_WHERE,
+					operation: "capture",
+					reference: "retryable",
+					input: {},
+					onPending: "conflict",
+					replay: (saved) => saved,
+				},
+				(command) =>
+					command.send(async () => {
+						throw error;
+					}),
+			);
+		const rejected = new BnplProviderError("tabby", "refused", { status: 400, rejected: true });
+		await expect(sendFailing(rejected)).rejects.toBe(rejected);
+		const uncertain = new BnplProviderError("tabby", "timed out");
+		await expect(sendFailing(uncertain)).rejects.toBe(uncertain);
+		await expect(sendFailing(rejected)).rejects.toMatchObject({ status: "CONFLICT" });
+	});
+	it("answers with the winner's saved result when another worker completed the command first", async () => {
+		const { ctx, readRow } = await makeSqliteCtx();
+		const result = await runMoneyCommand(
+			ctx,
+			{
+				where: ORDER_WHERE,
+				operation: "capture",
+				reference: "raced",
+				input: {},
+				onPending: "conflict",
+				replay: (saved) => saved,
+			},
+			async (command) => {
+				await mutateOrder<OrderRecord>(ctx, ORDER_WHERE, (order) => ({
+					moneyCommands: JSON.stringify(
+						JSON.parse(String(order.moneyCommands)).map((entry: { key: string; hash: string }) => ({
+							key: entry.key,
+							hash: entry.hash,
+							state: "completed",
+							result: { captureId: "winner" },
+						})),
+					),
+				}));
+				return command.settle(() => ({
+					response: { captureId: "loser" },
+					patch: { capturedAmountMinor: 9999 },
+				}));
+			},
+		);
+		expect(result).toEqual({ captureId: "winner" });
+		expect((await readRow()).capturedAmountMinor).toBe(0);
+	});
+	it("refuses to replay a completed command that reused the reference with other input", async () => {
+		const { ctx } = await makeSqliteCtx();
+		const outcome = runMoneyCommand(
+			ctx,
+			{
+				where: ORDER_WHERE,
+				operation: "refund",
+				reference: "reused",
+				input: { amountMinor: 10000 },
+				onPending: "conflict",
+				replay: (saved) => saved,
+			},
+			async (command) => {
+				await mutateOrder<OrderRecord>(ctx, ORDER_WHERE, (order) => ({
+					moneyCommands: JSON.stringify(
+						JSON.parse(String(order.moneyCommands)).map((entry: { key: string }) => ({
+							key: entry.key,
+							hash: "different-input",
+							state: "completed",
+							result: { refundId: "other-command" },
+						})),
+					),
+				}));
+				return command.settle(() => ({ response: { refundId: "ours" } }));
+			},
+		);
+		await expect(outcome).rejects.toMatchObject({ status: "CONFLICT" });
+	});
+	it("never resends a command whose earlier outcome is uncertain", async () => {
+		const { ctx } = await makeSqliteCtx();
+		await leavePending(ctx, "close", "once", { onPending: "verify" });
+		const request = vi.fn(async () => ({}));
+		await expect(
+			runMoneyCommand(
+				ctx,
+				{
+					where: ORDER_WHERE,
+					operation: "close",
+					reference: "once",
+					input: {},
+					onPending: "verify",
+					replay: (saved) => saved,
+				},
+				(command) => command.send(request),
+			),
+		).rejects.toThrow(/must be verified/);
+		expect(request).not.toHaveBeenCalled();
 	});
 
 	it("counts a provider operation once when two workers apply it concurrently", async () => {
 		const { ctx, readRow } = await makeSqliteCtx();
+		const provider = stubProvider("tabby");
 		const apply = () =>
-			applyOrderOperation<OrderRow>(ctx, ORDER_WHERE, "tabby:captured:shared", (current) => ({
-				capturedAmountMinor: current.capturedAmountMinor + 4000,
-			}));
+			mutateOrder<OrderRecord>(ctx, ORDER_WHERE, (current) =>
+				applyMoneyOperation(current, provider, {
+					kind: "captured",
+					id: "shared",
+					amountMinor: 4000,
+				}),
+			);
 		const results = await Promise.all([apply(), apply()]);
-		expect((await readRow()).capturedAmountMinor).toBe(4000);
-		expect(results.filter((result) => result.duplicate)).toHaveLength(1);
+		const row = (await readRow()) as OrderRow & { appliedOperations: string };
+		expect(row.capturedAmountMinor).toBe(4000);
+		expect(JSON.parse(row.appliedOperations)).toEqual(["tabby:captured:shared"]);
+		expect(results.filter((result) => Object.keys(result.applied).length === 0)).toHaveLength(1);
 	});
 	it("gives only one worker ownership of a stored event", async () => {
 		const { ctx } = await makeSqliteCtx();

@@ -1,4 +1,4 @@
-import { BnplPluginError, BnplProviderError } from "../../core/errors";
+import { BnplPluginError, BnplProviderError, rejectedBeforeDispatch } from "../../core/errors";
 import { isOneOf, isRecord } from "../../core/guards";
 import { parseJsonObject } from "../../core/json";
 import type { BnplCurrency } from "../../core/money";
@@ -168,6 +168,8 @@ export function tabby(
 			partialRefund: true,
 			multipleCaptures: true,
 			disputes: false,
+			cancelClosesPayment: true,
+			operationReferences: true,
 		},
 		supportedCountries: TABBY_COUNTRY_CODES,
 		supportedCurrencies: TABBY_CURRENCIES,
@@ -241,16 +243,19 @@ export function tabby(
 					...(payment.captures ?? []).map((record) => ({
 						id: record.id,
 						kind: "captured" as const,
+						reference: record.reference_id ?? undefined,
 						amountMinor: parseAmount({ amount: record.amount, currency: payment.currency }),
 						currency: formatAmount(0, payment.currency).currency,
 					})),
 					...(payment.refunds ?? []).map((record) => ({
 						id: record.id,
 						kind: "refunded" as const,
+						reference: record.reference_id ?? undefined,
 						amountMinor: parseAmount({ amount: record.amount, currency: payment.currency }),
 						currency: formatAmount(0, payment.currency).currency,
 					})),
 				],
+				closed: payment.status.toUpperCase() === "CLOSED",
 				raw: payment,
 			};
 		},
@@ -338,21 +343,24 @@ export function tabby(
 			ctx: ProviderContext,
 		): Promise<void> {
 			if (args.totalAmount) {
-				const payment = await client.getPayment(providerOrderId);
-				if (payment.id !== providerOrderId)
-					throw new BnplProviderError("tabby", "cancel payment identity mismatch");
-				const derived = fromTabbyPaymentDetails(payment, ctx.logger);
-				const amountMinor = parseAmount(args.totalAmount);
-				if (
-					args.totalAmount.currency !== payment.currency ||
-					amountMinor <= 0 ||
-					amountMinor !== derived.totalMinor - derived.capturedMinor
-				)
-					throw new BnplProviderError(
-						"tabby",
-						"cancel must cover the full uncaptured balance in the payment currency",
-						{ rejected: true },
-					);
+				try {
+					const payment = await client.getPayment(providerOrderId);
+					if (payment.id !== providerOrderId)
+						throw new BnplProviderError("tabby", "cancel payment identity mismatch");
+					const derived = fromTabbyPaymentDetails(payment, ctx.logger);
+					const amountMinor = parseAmount(args.totalAmount);
+					if (
+						args.totalAmount.currency !== payment.currency ||
+						amountMinor <= 0 ||
+						amountMinor !== derived.totalMinor - derived.capturedMinor
+					)
+						throw new BnplProviderError(
+							"tabby",
+							"cancel must cover the full uncaptured balance in the payment currency",
+						);
+				} catch (cause) {
+					throw rejectedBeforeDispatch("tabby", cause);
+				}
 			}
 			await closePayment(providerOrderId, ctx);
 		},

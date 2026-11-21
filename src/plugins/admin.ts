@@ -7,36 +7,42 @@ import {
 } from "better-auth/api";
 import { z } from "zod";
 import { BNPL_ERROR_CODES, BnplPluginError, BnplProviderError } from "../core/errors";
-import { isBnplCurrency, parseAmount } from "../core/money";
+import { type BnplCurrency, parseAmount } from "../core/money";
 import type { BnplProvider } from "../core/provider";
-import {
-	canTransition,
-	deriveCapturedStatus,
-	deriveRefundedStatus,
-	statusFromBalances,
-} from "../core/status";
-import type { BnplWebhookEvent } from "../core/types";
+import { isAuthorisedState, statusFromBalances } from "../core/status";
+import type { BnplMoneyOperation, BnplOrderState } from "../core/types";
 import { absoluteUrlMax1024Schema } from "../core/url";
 import type { BnplOptions } from "../plugin-types";
-import { buildAuthoriseOrderUpdate } from "./authorise-update";
 import {
-	type MoneyCommandReservation,
-	completeMoneyCommand,
-	isAuthorisedState,
-	recordCommandEvidence,
-	recoverLocalAuthoriseCommand,
+	type MoneyCommand,
+	type MoneyCommandSpec,
 	reportsAlreadyCanceled,
 	reportsAlreadyClosed,
 	reportsAuthorisedState,
-	reserveMoneyCommand,
-	sendReservedCommand,
-	tryReleaseReservation,
+	runMoneyCommand,
+	settlePendingMoneyOperation,
 } from "./money-command";
-import type { MoneyOperation } from "./operation-reference";
+import {
+	type OrderRecord,
+	acceptsCaptures,
+	applyAuthorisation,
+	applyCancellation,
+	applyMoneyOperations,
+	attributePendingOperations,
+	cancellationKey,
+	capturableMinor,
+	hasNothingLeftToClose,
+	importSnapshot,
+	isSettled,
+	nextStatus,
+	orderWhere,
+	readRemoteHistory,
+	refundableMinor,
+	snapshotIsBehind,
+} from "./order";
 import { mutateOrder, readAppliedOperations } from "./order-store";
 import { assertPersistedOrders } from "./persistence";
 import { publicOrder } from "./public-order";
-import { readRemoteHistory } from "./remote-history";
 import { moneySchema, orderItemSchema } from "./shared";
 import { recordSyntheticCaptureEvent, recordSyntheticRefundEvent } from "./webhook-events";
 const captureBodySchema = z.object({
@@ -92,36 +98,6 @@ export type AdminAuthorizer = (args: {
 export interface AdminSubpluginOptions {
 	isAuthorized: AdminAuthorizer;
 }
-interface OrderRow {
-	moneyCommands?: string | null;
-	id?: string;
-	appliedOperations?: string | null;
-	webhookTransitions?: string | null;
-	canceledAmountMinor?: number;
-	rawData?: string | null;
-	provider: string;
-	providerOrderId: string;
-	providerCheckoutId: string;
-	currency: string;
-	amountMinor: number;
-	capturedAmountMinor: number;
-	refundedAmountMinor: number;
-	status: string;
-	version?: number;
-}
-function hasNothingLeftToClose(row: OrderRow): boolean {
-	if (row.status === "closed" || row.status === "canceled") return true;
-	return (
-		["fully_captured", "partially_refunded", "fully_refunded"].includes(row.status) &&
-		row.capturedAmountMinor + (row.canceledAmountMinor ?? 0) >= row.amountMinor
-	);
-}
-function adminOrderWhere(row: OrderRow): Where[] {
-	return [
-		{ field: "provider", value: row.provider },
-		{ field: "providerOrderId", value: row.providerOrderId },
-	];
-}
 type AdminFailureCode =
 	| "CAPTURE_FAILED"
 	| "REFUND_FAILED"
@@ -136,7 +112,7 @@ function requireOrderId(ctx: GenericEndpointContext): string {
 	return orderId;
 }
 function assertOperationCurrency(
-	row: OrderRow,
+	row: OrderRecord,
 	money: {
 		currency: string;
 	},
@@ -167,87 +143,70 @@ function parseOperationAmount(
 		});
 	}
 }
-function operationKey(
-	provider: BnplProvider,
-	row: OrderRow,
-	operation: MoneyOperation,
-	id: string,
-	amountMinor: number,
-): string {
-	if (!isBnplCurrency(row.currency)) throw new Error("bnpl: invalid persisted currency");
-	const common = {
-		provider: provider.id,
-		orderId: row.providerOrderId,
-		amountMinor,
-		currency: row.currency,
-		raw: null,
-	};
-	const event: BnplWebhookEvent =
-		operation === "capture"
-			? { ...common, kind: "captured", captureId: id }
-			: { ...common, kind: "refunded", refundId: id };
-	return provider.webhookDedupKey?.(event) ?? `${provider.id}:${event.kind}:${id}`;
+function verificationConflict(message: string): APIError {
+	return new APIError("CONFLICT", { message, code: "MONEY_COMMAND_CONFLICT" });
 }
-async function persistAdminMoneyOperation(
-	ctx: GenericEndpointContext,
-	row: OrderRow,
+/** A pending command stays pending whenever its native evidence cannot be read or trusted. */
+async function verifyPending<Result>(verify: () => Promise<Result>): Promise<Result> {
+	try {
+		return await verify();
+	} catch (e) {
+		if (e instanceof APIError) throw e;
+		throw verificationConflict(
+			"Money command outcome is uncertain; verify native history before retrying",
+		);
+	}
+}
+/** Closure is proven by an explicit closed status or by a closed payment that settled its balance. */
+function confirmsClosure(remote: BnplOrderState): boolean {
+	return remote.status === "closed" || (remote.closed === true && isSettled(remote.status));
+}
+/** Records every native operation a confirmed capture or refund created, checked against the request. */
+async function settleMoneyOperation<
+	Result extends {
+		providerOrderId: string;
+		amountMinor: number;
+		operations?: BnplMoneyOperation[];
+		raw: unknown;
+	},
+>(
+	command: MoneyCommand<unknown>,
 	provider: BnplProvider,
-	operation: MoneyOperation,
-	result: { providerOrderId: string; amountMinor: number; raw: unknown },
+	row: OrderRecord,
+	kind: "captured" | "refunded",
+	result: Result,
 	id: string,
 	requestedMinor: number,
-	command: MoneyCommandReservation,
-): Promise<void> {
+): Promise<{ response: Result; operations: BnplMoneyOperation[] }> {
+	const operations = result.operations ?? [
+		{ id, kind, amountMinor: result.amountMinor, currency: row.currency as BnplCurrency },
+	];
 	if (
 		result.providerOrderId !== row.providerOrderId ||
 		!id ||
 		result.amountMinor !== requestedMinor ||
-		!Number.isSafeInteger(result.amountMinor)
+		!operations.some((operation) => operation.id === id) ||
+		new Set(operations.map((operation) => operation.id)).size !== operations.length ||
+		operations.some(
+			(operation) =>
+				!operation.id ||
+				operation.kind !== kind ||
+				operation.currency !== row.currency ||
+				!Number.isSafeInteger(operation.amountMinor) ||
+				operation.amountMinor <= 0,
+		) ||
+		operations.reduce((sum, operation) => sum + operation.amountMinor, 0) !== requestedMinor
 	) {
 		throw new BnplProviderError(provider.id, "Provider returned an inconsistent money operation");
 	}
-	const isCapture = operation === "capture";
-	await mutateOrder<OrderRow>(
-		ctx,
-		() => adminOrderWhere(row),
-		(current) => {
-			const moneyCommands = completeMoneyCommand(current.moneyCommands, command, result);
-			const operations = readAppliedOperations(current.appliedOperations);
-			const key = operationKey(provider, row, operation, id, result.amountMinor);
-			if (operations.includes(key)) return { moneyCommands, updatedAt: new Date() };
-			const captured = current.capturedAmountMinor + (isCapture ? result.amountMinor : 0);
-			const refunded = current.refundedAmountMinor + (isCapture ? 0 : result.amountMinor);
-			if (
-				!Number.isSafeInteger(captured) ||
-				!Number.isSafeInteger(refunded) ||
-				captured > current.amountMinor - (current.canceledAmountMinor ?? 0) ||
-				refunded > captured
-			) {
-				throw new Error("bnpl: operation would exceed the order's financial balance");
-			}
-			const derived =
-				refunded > 0
-					? deriveRefundedStatus({ totalAmountMinor: captured, cumulativeMinor: refunded })
-					: deriveCapturedStatus({
-							totalAmountMinor: current.amountMinor - (current.canceledAmountMinor ?? 0),
-							cumulativeMinor: captured,
-						});
-			const status =
-				(current.status === "closed" && refunded === 0) || !canTransition(current.status, derived)
-					? current.status
-					: derived;
-			return {
-				moneyCommands,
-				appliedOperations: JSON.stringify([...operations, key]),
-				status,
-				capturedAmountMinor: captured,
-				refundedAmountMinor: refunded,
-				...(isCapture ? { capturedAt: new Date() } : {}),
-				rawData: JSON.stringify(result.raw),
-				updatedAt: new Date(),
-			};
-		},
-	);
+	const response = await command.settle((order) => {
+		const applied = applyMoneyOperations(order, provider, kind, operations);
+		return {
+			response: result,
+			patch: applied ? { ...applied, rawData: JSON.stringify(result.raw) } : undefined,
+		};
+	});
+	return { response, operations };
 }
 function throwAdminOperationError(
 	ctx: GenericEndpointContext,
@@ -295,10 +254,10 @@ async function loadOrder(
 	providers: Record<string, BnplProvider>,
 	orderId: string,
 ): Promise<{
-	row: OrderRow;
+	row: OrderRecord;
 	provider: BnplProvider;
 }> {
-	const matches = await ctx.context.adapter.findMany<OrderRow>({
+	const matches = await ctx.context.adapter.findMany<OrderRecord>({
 		model: "bnplOrder",
 		where: [{ field: "providerOrderId", value: orderId }],
 		limit: 2,
@@ -330,14 +289,25 @@ async function loadAdminOrder(
 	providers: Record<string, BnplProvider>,
 ): Promise<{
 	orderId: string;
-	row: OrderRow;
+	row: OrderRecord;
 	provider: BnplProvider;
+	where: () => Where[];
 }> {
 	await assertAdmin(adminOptions.isAuthorized, ctx);
 	const orderId = requireOrderId(ctx);
 	assertPersistedOrders(options);
 	const { row, provider } = await loadOrder(ctx, providers, orderId);
-	return { orderId, row, provider };
+	return { orderId, row, provider, where: () => orderWhere(row.provider, row.providerOrderId) };
+}
+/** An admin command answers a retry with exactly the response its first completion saved. */
+async function runAdminCommand<Response extends object, Checked = undefined>(
+	ctx: GenericEndpointContext,
+	spec: MoneyCommandSpec<Checked>,
+	execute: (command: MoneyCommand<Checked>) => Promise<Response>,
+) {
+	// The journal saves exactly the response this command returned, so its replay has the same type.
+	const replay = (saved: Record<string, unknown>) => saved as Response;
+	return ctx.json(await runMoneyCommand<Response, Checked>(ctx, { ...spec, replay }, execute));
 }
 export const admin = (adminOptions: AdminSubpluginOptions) => {
 	if (typeof adminOptions?.isAuthorized !== "function") {
@@ -354,7 +324,7 @@ export const admin = (adminOptions: AdminSubpluginOptions) => {
 				if (ctx.query?.provider) where.push({ field: "provider", value: ctx.query.provider });
 				if (ctx.query?.status) where.push({ field: "status", value: ctx.query.status });
 				if (ctx.query?.userId) where.push({ field: "userId", value: ctx.query.userId });
-				const orders = await ctx.context.adapter.findMany<OrderRow>({
+				const orders = await ctx.context.adapter.findMany<OrderRecord>({
 					model: "bnplOrder",
 					where: where.length > 0 ? where : undefined,
 					limit: ctx.query?.limit ?? 20,
@@ -368,7 +338,7 @@ export const admin = (adminOptions: AdminSubpluginOptions) => {
 			"/bnpl/admin/orders/:orderId/capture",
 			{ method: "POST", body: captureBodySchema, use: [sessionMiddleware] },
 			async (ctx) => {
-				const { orderId, provider, row } = await loadAdminOrder(
+				const { orderId, provider, row, where } = await loadAdminOrder(
 					adminOptions,
 					options,
 					ctx,
@@ -377,72 +347,76 @@ export const admin = (adminOptions: AdminSubpluginOptions) => {
 				assertOperationCurrency(row, ctx.body.totalAmount, "capture");
 				const amountMinor = parseOperationAmount(ctx.body.totalAmount, "capture");
 				const merchantReferenceId = ctx.body.merchantReferenceId;
-				const reservation = await reserveMoneyCommand<OrderRow>(
+				return runAdminCommand(
 					ctx,
-					() => adminOrderWhere(row),
-					"capture",
-					merchantReferenceId,
-					ctx.body,
-					(current) => {
-						if (["closed", "canceled", "expired", "declined"].includes(current.status))
-							throw new APIError("BAD_REQUEST", {
-								message: "This order no longer accepts captures",
-								code: "INVALID_AMOUNT",
-							});
-
-						if (
-							amountMinor >
-							current.amountMinor - (current.canceledAmountMinor ?? 0) - current.capturedAmountMinor
-						)
-							throw new APIError("BAD_REQUEST", {
-								message: "Capture amount exceeds the remaining order balance",
-								code: "INVALID_AMOUNT",
-							});
+					{
+						where,
+						operation: "capture",
+						reference: merchantReferenceId,
+						input: ctx.body,
+						onPending: "verify",
+						recordBaseline: true,
+						check: (order) => {
+							if (!acceptsCaptures(order.status))
+								throw new APIError("BAD_REQUEST", {
+									message: "This order no longer accepts captures",
+									code: "INVALID_AMOUNT",
+								});
+							if (amountMinor > capturableMinor(order))
+								throw new APIError("BAD_REQUEST", {
+									message: "Capture amount exceeds the remaining order balance",
+									code: "INVALID_AMOUNT",
+								});
+						},
+					},
+					async (command) => {
+						if (command.state === "pending") {
+							const result = await verifyPending(() =>
+								settlePendingMoneyOperation(ctx, command, provider, row, "captured", amountMinor),
+							);
+							await recordSyntheticCaptureEvent(ctx, provider, orderId, row.currency, result);
+							return result;
+						}
+						try {
+							const result = await command.send(() =>
+								provider.capture(
+									orderId,
+									{
+										totalAmount: ctx.body.totalAmount,
+										shippingAmount: ctx.body.shippingAmount,
+										taxAmount: ctx.body.taxAmount,
+										discountAmount: ctx.body.discountAmount,
+										merchantReferenceId,
+										shippingInfo: ctx.body.shippingInfo,
+										items: ctx.body.items,
+									},
+									{ logger: ctx.context.logger },
+								),
+							);
+							const { response } = await settleMoneyOperation(
+								command,
+								provider,
+								row,
+								"captured",
+								result,
+								result.captureId,
+								amountMinor,
+							);
+							await recordSyntheticCaptureEvent(ctx, provider, orderId, row.currency, result);
+							return response;
+						} catch (e) {
+							if (e instanceof APIError) throw e;
+							throwAdminOperationError(ctx, e, "capture", "CAPTURE_FAILED");
+						}
 					},
 				);
-				if (reservation.kind === "completed") return ctx.json(reservation.result);
-				try {
-					const result = await sendReservedCommand(
-						ctx,
-						() => adminOrderWhere(row),
-						reservation.command,
-						() =>
-							provider.capture(
-								orderId,
-								{
-									totalAmount: ctx.body.totalAmount,
-									shippingAmount: ctx.body.shippingAmount,
-									taxAmount: ctx.body.taxAmount,
-									discountAmount: ctx.body.discountAmount,
-									merchantReferenceId,
-									shippingInfo: ctx.body.shippingInfo,
-									items: ctx.body.items,
-								},
-								{ logger: ctx.context.logger },
-							),
-					);
-					await persistAdminMoneyOperation(
-						ctx,
-						row,
-						provider,
-						"capture",
-						result,
-						result.captureId,
-						amountMinor,
-						reservation.command,
-					);
-					await recordSyntheticCaptureEvent(ctx, provider, orderId, row.currency, result);
-					return ctx.json(result);
-				} catch (e) {
-					throwAdminOperationError(ctx, e, "capture", "CAPTURE_FAILED");
-				}
 			},
 		),
 		bnplAdminRefund: createAuthEndpoint(
 			"/bnpl/admin/orders/:orderId/refund",
 			{ method: "POST", body: refundBodySchema, use: [sessionMiddleware] },
 			async (ctx) => {
-				const { orderId, provider, row } = await loadAdminOrder(
+				const { orderId, provider, row, where } = await loadAdminOrder(
 					adminOptions,
 					options,
 					ctx,
@@ -451,60 +425,78 @@ export const admin = (adminOptions: AdminSubpluginOptions) => {
 				assertOperationCurrency(row, ctx.body.totalAmount, "refund");
 				const amountMinor = parseOperationAmount(ctx.body.totalAmount, "refund");
 				const merchantRefundId = ctx.body.merchantRefundId;
-				const reservation = await reserveMoneyCommand<OrderRow>(
+				return runAdminCommand(
 					ctx,
-					() => adminOrderWhere(row),
-					"refund",
-					merchantRefundId,
-					ctx.body,
-					(current) => {
-						if (amountMinor > current.capturedAmountMinor - current.refundedAmountMinor)
-							throw new APIError("BAD_REQUEST", {
-								message: "Refund amount exceeds the captured balance available for refund",
-								code: "INVALID_AMOUNT",
-							});
+					{
+						where,
+						operation: "refund",
+						reference: merchantRefundId,
+						input: ctx.body,
+						onPending: "verify",
+						recordBaseline: true,
+						check: (order) => {
+							if (amountMinor > refundableMinor(order))
+								throw new APIError("BAD_REQUEST", {
+									message: "Refund amount exceeds the captured balance available for refund",
+									code: "INVALID_AMOUNT",
+								});
+						},
+					},
+					async (command) => {
+						if (command.state === "pending") {
+							const result = await verifyPending(() =>
+								settlePendingMoneyOperation(ctx, command, provider, row, "refunded", amountMinor),
+							);
+							for (const operation of result.operations ?? [])
+								await recordSyntheticRefundEvent(ctx, provider, orderId, row.currency, {
+									refundId: operation.id,
+									amountMinor: operation.amountMinor,
+									raw: null,
+								});
+							return result;
+						}
+						try {
+							const result = await command.send(() =>
+								provider.refund(
+									orderId,
+									{
+										totalAmount: ctx.body.totalAmount,
+										items: ctx.body.items,
+										comment: ctx.body.comment,
+										merchantRefundId,
+									},
+									{ logger: ctx.context.logger },
+								),
+							);
+							const { response, operations } = await settleMoneyOperation(
+								command,
+								provider,
+								row,
+								"refunded",
+								result,
+								result.refundId,
+								amountMinor,
+							);
+							for (const operation of operations)
+								await recordSyntheticRefundEvent(ctx, provider, orderId, row.currency, {
+									refundId: operation.id,
+									amountMinor: operation.amountMinor,
+									raw: result.raw,
+								});
+							return response;
+						} catch (e) {
+							if (e instanceof APIError) throw e;
+							throwAdminOperationError(ctx, e, "refund", "REFUND_FAILED");
+						}
 					},
 				);
-				if (reservation.kind === "completed") return ctx.json(reservation.result);
-				try {
-					const result = await sendReservedCommand(
-						ctx,
-						() => adminOrderWhere(row),
-						reservation.command,
-						() =>
-							provider.refund(
-								orderId,
-								{
-									totalAmount: ctx.body.totalAmount,
-									items: ctx.body.items,
-									comment: ctx.body.comment,
-									merchantRefundId,
-								},
-								{ logger: ctx.context.logger },
-							),
-					);
-					await persistAdminMoneyOperation(
-						ctx,
-						row,
-						provider,
-						"refund",
-						result,
-						result.refundId,
-						amountMinor,
-						reservation.command,
-					);
-					await recordSyntheticRefundEvent(ctx, provider, orderId, row.currency, result);
-					return ctx.json(result);
-				} catch (e) {
-					throwAdminOperationError(ctx, e, "refund", "REFUND_FAILED");
-				}
 			},
 		),
 		bnplAdminCancel: createAuthEndpoint(
 			"/bnpl/admin/orders/:orderId/cancel",
 			{ method: "POST", body: cancelBodySchema, use: [sessionMiddleware] },
 			async (ctx) => {
-				const { orderId, provider, row } = await loadAdminOrder(
+				const { orderId, provider, row, where } = await loadAdminOrder(
 					adminOptions,
 					options,
 					ctx,
@@ -513,6 +505,7 @@ export const admin = (adminOptions: AdminSubpluginOptions) => {
 				const amountMinor = ctx.body.totalAmount
 					? parseOperationAmount(ctx.body.totalAmount, "cancel")
 					: undefined;
+				const closesPayment = provider.capabilities.cancelClosesPayment === true;
 				if (ctx.body.totalAmount) {
 					assertOperationCurrency(row, ctx.body.totalAmount, "cancel");
 					if (!ctx.body.merchantReferenceId)
@@ -521,197 +514,172 @@ export const admin = (adminOptions: AdminSubpluginOptions) => {
 							code: "INVALID_CANCEL_REFERENCE",
 						});
 				}
-				let verifyExistingClosure = false;
-				const reservation = await reserveMoneyCommand<OrderRow>(
+				return runAdminCommand(
 					ctx,
-					() => adminOrderWhere(row),
-					"cancel",
-					ctx.body.merchantReferenceId ?? orderId,
-					ctx.body,
-					(current) => {
-						verifyExistingClosure =
-							provider.id === "tabby" &&
-							amountMinor === undefined &&
-							hasNothingLeftToClose(current);
-						if (
-							amountMinor !== undefined &&
-							amountMinor + current.capturedAmountMinor + (current.canceledAmountMinor ?? 0) >
-								current.amountMinor
-						)
-							throw new APIError("BAD_REQUEST", {
-								message: "Cancellation exceeds remaining order balance",
-							});
-					},
-					true,
-				);
-				if (reservation.kind === "completed") return ctx.json(reservation.result);
-				const finish = async (
-					status: Awaited<ReturnType<typeof provider.fetchOrder>>["status"],
-					cancelId?: string,
-					confirmedAmount?: number,
-					remote?: Awaited<ReturnType<typeof provider.fetchOrder>>,
-				) => {
-					const response = { orderId, status };
-					await mutateOrder<OrderRow>(
-						ctx,
-						() => adminOrderWhere(row),
-						(current) => {
-							const update: Record<string, unknown> = {
-								moneyCommands: completeMoneyCommand(
-									current.moneyCommands,
-									reservation.command,
-									response,
-								),
-								updatedAt: new Date(),
-							};
-							if (remote) {
-								if (
-									amountMinor === undefined &&
-									(remote.capturedAmountMinor < current.capturedAmountMinor ||
-										remote.refundedAmountMinor < current.refundedAmountMinor ||
-										(remote.canceledAmountMinor ?? 0) < (current.canceledAmountMinor ?? 0))
-								)
-									throw new Error("bnpl: remote closure snapshot predates local financial state");
-								const history = readRemoteHistory(provider, current, remote);
-								Object.assign(update, {
-									capturedAmountMinor: history.captured,
-									refundedAmountMinor: history.refunded,
-									canceledAmountMinor: history.canceled,
-									appliedOperations: JSON.stringify(history.keys),
+					{
+						where,
+						operation: "cancel",
+						reference: ctx.body.merchantReferenceId ?? orderId,
+						input: ctx.body,
+						onPending: "verify",
+						recordBaseline: true,
+						check: (order) => {
+							if (
+								amountMinor !== undefined &&
+								amountMinor + order.capturedAmountMinor + (order.canceledAmountMinor ?? 0) >
+									order.amountMinor
+							)
+								throw new APIError("BAD_REQUEST", {
+									message: "Cancellation exceeds remaining order balance",
 								});
-							} else if (cancelId && confirmedAmount !== undefined) {
-								const operations = readAppliedOperations(current.appliedOperations);
-								const key = `${provider.id}:cancel:${cancelId}`;
-								if (!operations.includes(key)) {
-									const canceled = (current.canceledAmountMinor ?? 0) + confirmedAmount;
-									if (
-										!Number.isSafeInteger(canceled) ||
-										canceled + current.capturedAmountMinor > current.amountMinor
-									)
-										throw new Error("bnpl: cancellation exceeds the remaining order balance");
-									update.canceledAmountMinor = canceled;
-									update.appliedOperations = JSON.stringify([...operations, key]);
-								}
-							}
-							const target = statusFromBalances(status, {
-								amountMinor: current.amountMinor,
-								captured: Number(update.capturedAmountMinor ?? current.capturedAmountMinor),
-								refunded: Number(update.refundedAmountMinor ?? current.refundedAmountMinor),
-								canceled: Number(update.canceledAmountMinor ?? current.canceledAmountMinor ?? 0),
-							});
-							if (canTransition(current.status, target)) {
-								update.status = target;
-								if (target === "canceled") update.canceledAt = new Date();
-							}
-							return update;
+							return {
+								verifyClosure:
+									closesPayment && amountMinor === undefined && hasNothingLeftToClose(order),
+							};
 						},
-					);
-					return ctx.json(response);
-				};
-				const recover = async () => {
-					const before = reservation.command.before;
-					if (!before) throw new Error("bnpl: cancellation reservation lacks recovery evidence");
-					const remote = await provider.fetchOrder(orderId, { logger: ctx.context.logger });
-					readRemoteHistory(provider, { ...row, ...before }, remote);
-					const closesPayment = provider.id === "tabby";
-					if (closesPayment) {
-						const raw = remote.raw as { status?: unknown } | null;
-						if (
-							raw?.status !== "CLOSED" ||
-							(amountMinor !== undefined &&
-								(remote.capturedAmountMinor !== before.capturedAmountMinor ||
-									amountMinor !==
-										row.amountMinor - before.capturedAmountMinor - before.canceledAmountMinor))
-						)
-							throw new Error(
-								"bnpl: remote payment does not confirm closure of the remaining balance",
+					},
+					async (command) => {
+						const finish = async (
+							status: BnplOrderState["status"],
+							evidence:
+								| { remote: BnplOrderState }
+								| { cancelId: string; amountMinor: number }
+								| undefined,
+						) => {
+							const response = { orderId, status };
+							return await command.settle((order) => {
+								const patch: Record<string, unknown> = {};
+								if (evidence && "remote" in evidence) {
+									if (amountMinor === undefined && snapshotIsBehind(order, evidence.remote))
+										throw new Error("bnpl: remote closure snapshot predates local financial state");
+									Object.assign(patch, importSnapshot(order, provider, evidence.remote));
+								} else if (evidence) {
+									Object.assign(
+										patch,
+										applyCancellation(order, provider, evidence.cancelId, evidence.amountMinor),
+									);
+								}
+								const merged = { ...order, ...patch } as OrderRecord;
+								patch.status = nextStatus(
+									order.status,
+									statusFromBalances(status, {
+										amountMinor: order.amountMinor,
+										captured: merged.capturedAmountMinor,
+										refunded: merged.refundedAmountMinor,
+										canceled: merged.canceledAmountMinor ?? 0,
+									}),
+								);
+								if (patch.status === "canceled" && order.status !== "canceled")
+									patch.canceledAt = new Date();
+								return { response, patch };
+							});
+						};
+						const recover = async () => {
+							const before = command.baseline;
+							if (!before)
+								throw new Error("bnpl: cancellation reservation lacks recovery evidence");
+							const remote = await provider.fetchOrder(orderId, { logger: ctx.context.logger });
+							if (closesPayment) {
+								readRemoteHistory(provider, { ...row, ...before }, remote);
+								if (
+									!(remote.closed === true || confirmsClosure(remote)) ||
+									(amountMinor !== undefined &&
+										(remote.capturedAmountMinor !== before.capturedAmountMinor ||
+											amountMinor !==
+												row.amountMinor - before.capturedAmountMinor - before.canceledAmountMinor))
+								)
+									throw new Error(
+										"bnpl: remote payment does not confirm closure of the remaining balance",
+									);
+							} else if (amountMinor !== undefined) {
+								if (
+									!attributePendingOperations(
+										provider,
+										row,
+										before,
+										remote,
+										"canceled",
+										amountMinor,
+									)
+								)
+									throw new Error("bnpl: cancellation outcome is not uniquely proven");
+							} else {
+								readRemoteHistory(provider, { ...row, ...before }, remote);
+								if (remote.status !== "canceled")
+									throw new Error("bnpl: remote order does not confirm cancellation");
+							}
+							return finish(remote.status, { remote });
+						};
+						if (command.state === "pending" || command.checked?.verifyClosure) {
+							try {
+								return await recover();
+							} catch {
+								await command.release();
+								throw verificationConflict(
+									"Cancellation outcome is uncertain; verify native history before retrying",
+								);
+							}
+						}
+						try {
+							const result = await command.send(
+								() =>
+									provider.cancel(
+										orderId,
+										{
+											totalAmount: ctx.body.totalAmount,
+											shippingAmount: ctx.body.shippingAmount,
+											taxAmount: ctx.body.taxAmount,
+											discountAmount: ctx.body.discountAmount,
+											merchantReferenceId: ctx.body.merchantReferenceId,
+											items: ctx.body.items,
+											comment: ctx.body.comment,
+										},
+										{ logger: ctx.context.logger },
+									),
+								amountMinor !== undefined
+									? undefined
+									: closesPayment
+										? reportsAlreadyClosed
+										: reportsAlreadyCanceled,
 							);
-					} else if (amountMinor !== undefined) {
-						const prior = new Set(readAppliedOperations(before.appliedOperations));
-						const unseen = (remote.operations ?? []).filter(
-							(operation) =>
-								operation.kind === "canceled" &&
-								!prior.has(`${provider.id}:cancel:${operation.id}`),
-						);
-						if (
-							remote.capturedAmountMinor !== before.capturedAmountMinor ||
-							remote.refundedAmountMinor !== before.refundedAmountMinor ||
-							(remote.canceledAmountMinor ?? 0) !== before.canceledAmountMinor + amountMinor ||
-							unseen.length !== 1 ||
-							unseen[0]?.amountMinor !== amountMinor
-						)
-							throw new Error("bnpl: cancellation outcome is not uniquely proven");
-					} else if (remote.status !== "canceled") {
-						throw new Error("bnpl: remote order does not confirm cancellation");
-					}
-					return finish(remote.status, undefined, undefined, remote);
-				};
-				if (reservation.kind === "pending" || verifyExistingClosure) {
-					try {
-						return await recover();
-					} catch {
-						if (reservation.kind === "reserved")
-							await tryReleaseReservation(ctx, () => adminOrderWhere(row), reservation.command);
-						throw new APIError("CONFLICT", {
-							message: "Cancellation outcome is uncertain; verify native history before retrying",
-							code: "MONEY_COMMAND_CONFLICT",
-						});
-					}
-				}
-				try {
-					const result = await sendReservedCommand(
-						ctx,
-						() => adminOrderWhere(row),
-						reservation.command,
-						() =>
-							provider.cancel(
-								orderId,
-								{
-									totalAmount: ctx.body.totalAmount,
-									shippingAmount: ctx.body.shippingAmount,
-									taxAmount: ctx.body.taxAmount,
-									discountAmount: ctx.body.discountAmount,
-									merchantReferenceId: ctx.body.merchantReferenceId,
-									items: ctx.body.items,
-									comment: ctx.body.comment,
-								},
-								{ logger: ctx.context.logger },
-							),
-						amountMinor !== undefined
-							? undefined
-							: provider.id === "tabby"
-								? reportsAlreadyClosed
-								: reportsAlreadyCanceled,
-					);
-					if (result && result.providerOrderId !== orderId)
-						throw new Error("bnpl: cancel order identity mismatch");
-					if (amountMinor === undefined || !result?.cancelId || result.amountMinor === undefined)
-						return await recover();
-					if (
-						!Number.isSafeInteger(result.amountMinor) ||
-						result.amountMinor <= 0 ||
-						result.amountMinor !== amountMinor
-					)
-						throw new Error("bnpl: inconsistent cancellation amount");
-					if (
-						readAppliedOperations(reservation.command.before?.appliedOperations).includes(
-							`${provider.id}:cancel:${result.cancelId}`,
-						)
-					)
-						throw new Error(
-							"bnpl: cancellation response repeats an operation predating this command",
-						);
-					return await finish(result.status, result.cancelId, result.amountMinor);
-				} catch (e) {
-					throwAdminOperationError(ctx, e, "cancel", "CANCEL_FAILED");
-				}
+							if (result && result.providerOrderId !== orderId)
+								throw new Error("bnpl: cancel order identity mismatch");
+							if (
+								amountMinor === undefined ||
+								!result?.cancelId ||
+								result.amountMinor === undefined
+							)
+								return await recover();
+							if (
+								!Number.isSafeInteger(result.amountMinor) ||
+								result.amountMinor <= 0 ||
+								result.amountMinor !== amountMinor
+							)
+								throw new Error("bnpl: inconsistent cancellation amount");
+							if (
+								readAppliedOperations(command.baseline?.appliedOperations).includes(
+									cancellationKey(provider, row, result.cancelId),
+								)
+							)
+								throw new Error(
+									"bnpl: cancellation response repeats an operation predating this command",
+								);
+							return await finish(result.status, {
+								cancelId: result.cancelId,
+								amountMinor: result.amountMinor,
+							});
+						} catch (e) {
+							throwAdminOperationError(ctx, e, "cancel", "CANCEL_FAILED");
+						}
+					},
+				);
 			},
 		),
 		bnplAdminAuthorise: createAuthEndpoint(
 			"/bnpl/admin/orders/:orderId/authorise",
 			{ method: "POST", use: [sessionMiddleware] },
 			async (ctx) => {
-				const { orderId, provider, row } = await loadAdminOrder(
+				const { orderId, provider, row, where } = await loadAdminOrder(
 					adminOptions,
 					options,
 					ctx,
@@ -724,127 +692,62 @@ export const admin = (adminOptions: AdminSubpluginOptions) => {
 						code: "OPERATION_NOT_SUPPORTED",
 					});
 				}
-				const reservation = await reserveMoneyCommand<OrderRow>(
+				return runAdminCommand(
 					ctx,
-					() => adminOrderWhere(row),
-					"authorise",
-					orderId,
-					{},
-					undefined,
-					true,
-				);
-				if (reservation.kind === "completed") return ctx.json(reservation.result);
-				const recoveryRequested = reservation.kind === "pending" || isAuthorisedState(row.status);
-				try {
-					const local = await recoverLocalAuthoriseCommand<OrderRow>(
-						ctx,
-						() => adminOrderWhere(row),
-						reservation.command,
-						orderId,
-					);
-					if (local) return ctx.json(local);
-					if (recoveryRequested)
-						throw new Error("bnpl: authorisation outcome is uncertain; verifying remote state");
-					const result = await sendReservedCommand(
-						ctx,
-						() => adminOrderWhere(row),
-						reservation.command,
-						() => authorize(orderId, { logger: ctx.context.logger }),
-						reportsAuthorisedState,
-					);
-					if (result.providerOrderId !== orderId)
-						throw new Error("bnpl: authorisation order identity mismatch");
-					let capturedAmountMinor: number | undefined;
-					await mutateOrder<OrderRow>(
-						ctx,
-						() => adminOrderWhere(row),
-						(current) => {
-							const built = buildAuthoriseOrderUpdate(result, {
-								currency: current.currency,
-								amountMinor: current.amountMinor,
-								canceledAmountMinor: current.canceledAmountMinor,
-								status: current.status,
-								capturedAmountMinor: current.capturedAmountMinor,
-							});
-							capturedAmountMinor = built.capturedAmountMinor;
-							if (
-								capturedAmountMinor !== undefined &&
-								(!Number.isSafeInteger(capturedAmountMinor) ||
-									capturedAmountMinor < 0 ||
-									capturedAmountMinor > current.amountMinor - (current.canceledAmountMinor ?? 0))
-							)
-								throw new Error("bnpl: invalid authorised capture amount");
-							const keys = readAppliedOperations(current.appliedOperations);
-							if (result.captureId && capturedAmountMinor !== undefined)
-								keys.push(
-									operationKey(provider, current, "capture", result.captureId, capturedAmountMinor),
-								);
-							return {
-								...built.update,
-								appliedOperations: JSON.stringify([...new Set(keys)]),
-								moneyCommands: completeMoneyCommand(
-									current.moneyCommands,
-									reservation.command,
-									result as unknown as Record<string, unknown>,
-								),
-							};
-						},
-					);
-					if (result.captureId && capturedAmountMinor !== undefined) {
-						await recordSyntheticCaptureEvent(ctx, provider, orderId, row.currency, {
-							captureId: result.captureId,
-							amountMinor: capturedAmountMinor,
-							raw: result.raw,
-						});
-					}
-					return ctx.json(result);
-				} catch (e) {
-					if (recoveryRequested || reportsAuthorisedState(e)) {
-						const remote = await provider.fetchOrder(orderId, { logger: ctx.context.logger });
-						if (remote.providerOrderId === orderId && isAuthorisedState(remote.status)) {
-							await mutateOrder<OrderRow>(
-								ctx,
-								() => adminOrderWhere(row),
-								(current) => {
-									const { keys, captured, refunded, canceled } = readRemoteHistory(
-										provider,
-										current,
-										remote,
-									);
-									const candidate = statusFromBalances(remote.status, {
-										amountMinor: current.amountMinor,
-										captured,
-										refunded,
-										canceled,
-									});
-									return {
-										status: canTransition(current.status, candidate) ? candidate : current.status,
-										capturedAmountMinor: captured,
-										refundedAmountMinor: refunded,
-										canceledAmountMinor: canceled,
-										appliedOperations: JSON.stringify([...new Set(keys)]),
-										moneyCommands: completeMoneyCommand(
-											current.moneyCommands,
-											reservation.command,
-											{ orderId, status: remote.status, already: true },
-										),
-										authorisedAt: new Date(),
-										updatedAt: new Date(),
-									};
-								},
+					{ where, operation: "authorise", reference: orderId, input: {}, onPending: "verify" },
+					async (command) => {
+						const recoveryRequested = command.state === "pending" || isAuthorisedState(row.status);
+						try {
+							const local = await command.settleIf((order) =>
+								isAuthorisedState(order.status)
+									? { response: { orderId, status: order.status, already: true } }
+									: null,
 							);
-							return ctx.json({ orderId, status: remote.status, already: true });
+							if (local) return local;
+							if (recoveryRequested)
+								throw new Error("bnpl: authorisation outcome is uncertain; verifying remote state");
+							const result = await command.send(
+								() => authorize(orderId, { logger: ctx.context.logger }),
+								reportsAuthorisedState,
+							);
+							if (result.providerOrderId !== orderId)
+								throw new Error("bnpl: authorisation order identity mismatch");
+							let capturedAmountMinor: number | undefined;
+							const settled = await command.settle((order) => {
+								const applied = applyAuthorisation(order, provider, result);
+								capturedAmountMinor = applied.capturedAmountMinor;
+								return { response: result, patch: applied.patch };
+							});
+							if (result.captureId && capturedAmountMinor !== undefined) {
+								await recordSyntheticCaptureEvent(ctx, provider, orderId, row.currency, {
+									captureId: result.captureId,
+									amountMinor: capturedAmountMinor,
+									raw: result.raw,
+								});
+							}
+							return settled;
+						} catch (e) {
+							if (recoveryRequested || reportsAuthorisedState(e)) {
+								const remote = await provider.fetchOrder(orderId, { logger: ctx.context.logger });
+								if (remote.providerOrderId === orderId && isAuthorisedState(remote.status)) {
+									const response = { orderId, status: remote.status, already: true };
+									return await command.settle((order) => ({
+										response,
+										patch: { ...importSnapshot(order, provider, remote), authorisedAt: new Date() },
+									}));
+								}
+							}
+							throwAdminOperationError(ctx, e, "authorise", "AUTHORISE_FAILED");
 						}
-					}
-					throwAdminOperationError(ctx, e, "authorise", "AUTHORISE_FAILED");
-				}
+					},
+				);
 			},
 		),
 		bnplAdminReconcile: createAuthEndpoint(
 			"/bnpl/admin/orders/:orderId/reconcile",
 			{ method: "POST", use: [sessionMiddleware] },
 			async (ctx) => {
-				const { orderId, provider, row } = await loadAdminOrder(
+				const { orderId, provider, row, where } = await loadAdminOrder(
 					adminOptions,
 					options,
 					ctx,
@@ -860,40 +763,15 @@ export const admin = (adminOptions: AdminSubpluginOptions) => {
 						parseAmount(remote.totalAmount) !== row.amountMinor
 					)
 						throw new Error("bnpl: reconciliation identity or total mismatch");
-					await mutateOrder<OrderRow>(
-						ctx,
-						() => adminOrderWhere(row),
-						(current) => {
-							if (
-								(current.version ?? 0) !== readVersion ||
-								remote.capturedAmountMinor < current.capturedAmountMinor ||
-								remote.refundedAmountMinor < current.refundedAmountMinor ||
-								(remote.canceledAmountMinor ?? current.canceledAmountMinor ?? 0) <
-									(current.canceledAmountMinor ?? 0)
-							)
-								throw new Error("bnpl: reconciliation snapshot is stale; retry reconciliation");
-							const { keys, captured, refunded, canceled } = readRemoteHistory(
-								provider,
-								current,
-								remote,
-							);
-							const candidate = statusFromBalances(remote.status, {
-								amountMinor: current.amountMinor,
-								captured,
-								refunded,
-								canceled,
-							});
-							return {
-								status: canTransition(current.status, candidate) ? candidate : current.status,
-								capturedAmountMinor: captured,
-								refundedAmountMinor: refunded,
-								canceledAmountMinor: canceled,
-								appliedOperations: JSON.stringify([...new Set(keys)]),
-								rawData: JSON.stringify(remote.raw),
-								updatedAt: new Date(),
-							};
-						},
-					);
+					await mutateOrder<OrderRecord>(ctx, where, (current) => {
+						if ((current.version ?? 0) !== readVersion || snapshotIsBehind(current, remote))
+							throw new Error("bnpl: reconciliation snapshot is stale; retry reconciliation");
+						return {
+							...importSnapshot(current, provider, remote),
+							rawData: JSON.stringify(remote.raw),
+							updatedAt: new Date(),
+						};
+					});
 					return ctx.json({ synced: true, order: remote });
 				} catch (e) {
 					throwAdminOperationError(ctx, e, "reconcile", "RECONCILE_FAILED");
@@ -904,7 +782,7 @@ export const admin = (adminOptions: AdminSubpluginOptions) => {
 			"/bnpl/admin/orders/:orderId/void",
 			{ method: "POST", body: voidBodySchema, use: [sessionMiddleware] },
 			async (ctx) => {
-				const { orderId, provider, row } = await loadAdminOrder(
+				const { orderId, provider, row, where } = await loadAdminOrder(
 					adminOptions,
 					options,
 					ctx,
@@ -927,137 +805,91 @@ export const admin = (adminOptions: AdminSubpluginOptions) => {
 						message: "checkoutId is required because this order has no providerCheckoutId",
 					});
 				}
-				const reservation = await reserveMoneyCommand<OrderRow>(
+				return runAdminCommand(
 					ctx,
-					() => adminOrderWhere(row),
-					"void",
-					orderId,
-					{ checkoutId },
-					undefined,
-					true,
-				);
-				if (reservation.kind === "completed") return ctx.json(reservation.result);
-				let confirmedCapturedAmountMinor = reservation.command.evidence?.voidedCapturedAmountMinor;
-				try {
-					if (reservation.kind === "reserved") {
-						const result = await sendReservedCommand(
-							ctx,
-							() => adminOrderWhere(row),
-							reservation.command,
-							() => voidCheckout(checkoutId, orderId, { logger: ctx.context.logger }),
-						);
-						if (
-							result &&
-							(typeof result.voided !== "boolean" ||
-								(result.capturedCurrency !== undefined &&
-									result.capturedCurrency !== row.currency) ||
-								(result.capturedAmountMinor !== undefined &&
-									(!Number.isSafeInteger(result.capturedAmountMinor) ||
-										result.capturedAmountMinor < 0 ||
-										result.capturedAmountMinor > row.amountMinor)))
-						)
-							throw new Error("bnpl: invalid provider void response");
-						if (
-							result?.voided === true &&
-							result.capturedCurrency === row.currency &&
-							result.capturedAmountMinor !== undefined
-						) {
-							confirmedCapturedAmountMinor = result.capturedAmountMinor;
-							await recordCommandEvidence(ctx, () => adminOrderWhere(row), reservation.command, {
-								voidedCapturedAmountMinor: result.capturedAmountMinor,
-							});
-						}
-						if (result?.voided === false) {
+					{
+						where,
+						operation: "void",
+						reference: orderId,
+						input: { checkoutId },
+						onPending: "verify",
+					},
+					async (command) => {
+						let confirmedCapturedAmountMinor = command.evidence?.voidedCapturedAmountMinor;
+						try {
+							if (command.state === "reserved") {
+								const result = await command.send(() =>
+									voidCheckout(checkoutId, orderId, { logger: ctx.context.logger }),
+								);
+								if (
+									result &&
+									(typeof result.voided !== "boolean" ||
+										(result.capturedCurrency !== undefined &&
+											result.capturedCurrency !== row.currency) ||
+										(result.capturedAmountMinor !== undefined &&
+											(!Number.isSafeInteger(result.capturedAmountMinor) ||
+												result.capturedAmountMinor < 0 ||
+												result.capturedAmountMinor > row.amountMinor)))
+								)
+									throw new Error("bnpl: invalid provider void response");
+								if (
+									result?.voided === true &&
+									result.capturedCurrency === row.currency &&
+									result.capturedAmountMinor !== undefined
+								) {
+									confirmedCapturedAmountMinor = result.capturedAmountMinor;
+									await command.recordEvidence({
+										voidedCapturedAmountMinor: result.capturedAmountMinor,
+									});
+								}
+								if (result?.voided === false) {
+									const response = {
+										orderId,
+										voided: false,
+										capturedAmountMinor: result.capturedAmountMinor,
+									};
+									return await command.settle(() => ({ response }));
+								}
+							}
+							const remote = await provider.fetchOrder(orderId, { logger: ctx.context.logger });
 							const response = {
 								orderId,
-								voided: false,
-								capturedAmountMinor: result.capturedAmountMinor,
+								voided: true,
+								capturedAmountMinor: remote.capturedAmountMinor,
 							};
-							await mutateOrder<OrderRow>(
-								ctx,
-								() => adminOrderWhere(row),
-								(current) => ({
-									moneyCommands: completeMoneyCommand(
-										current.moneyCommands,
-										reservation.command,
-										response,
-									),
-									updatedAt: new Date(),
-								}),
-							);
-							return ctx.json(response);
-						}
-					}
-					const remote = await provider.fetchOrder(orderId, { logger: ctx.context.logger });
-					const response = {
-						orderId,
-						voided: true,
-						capturedAmountMinor: remote.capturedAmountMinor,
-					};
-					await mutateOrder<OrderRow>(
-						ctx,
-						() => adminOrderWhere(row),
-						(current) => {
-							if (
-								remote.capturedAmountMinor < current.capturedAmountMinor ||
-								remote.refundedAmountMinor < current.refundedAmountMinor ||
-								(remote.canceledAmountMinor ?? 0) < (current.canceledAmountMinor ?? 0)
-							)
-								throw new APIError("CONFLICT", {
-									message: "Void verification snapshot is older than current financial state",
-									code: "MONEY_COMMAND_CONFLICT",
-								});
-							const { captured, refunded, canceled, keys } = readRemoteHistory(
-								provider,
-								current,
-								remote,
-							);
-							const knownPaidVoid =
-								confirmedCapturedAmountMinor !== undefined && confirmedCapturedAmountMinor > 0;
-							if (
-								knownPaidVoid
-									? captured !== confirmedCapturedAmountMinor
-									: !["expired", "canceled"].includes(remote.status) ||
-										captured !== 0 ||
-										refunded !== 0
-							)
-								throw new APIError("CONFLICT", {
-									code: "MONEY_COMMAND_CONFLICT",
-									message: "Void outcome is uncertain; verify the checkout before retrying",
-								});
-							const candidate = statusFromBalances(remote.status, {
-								amountMinor: current.amountMinor,
-								captured,
-								refunded,
-								canceled,
+							return await command.settle((order) => {
+								if (snapshotIsBehind(order, remote))
+									throw verificationConflict(
+										"Void verification snapshot is older than current financial state",
+									);
+								const imported = importSnapshot(order, provider, remote);
+								const knownPaidVoid =
+									confirmedCapturedAmountMinor !== undefined && confirmedCapturedAmountMinor > 0;
+								if (
+									knownPaidVoid
+										? imported.capturedAmountMinor !== confirmedCapturedAmountMinor
+										: !["expired", "canceled"].includes(remote.status) ||
+											imported.capturedAmountMinor !== 0 ||
+											imported.refundedAmountMinor !== 0
+								)
+									throw verificationConflict(
+										"Void outcome is uncertain; verify the checkout before retrying",
+									);
+								return { response, patch: imported };
 							});
-							return {
-								status: canTransition(current.status, candidate) ? candidate : current.status,
-								capturedAmountMinor: captured,
-								refundedAmountMinor: refunded,
-								canceledAmountMinor: canceled,
-								appliedOperations: JSON.stringify(keys),
-								moneyCommands: completeMoneyCommand(
-									current.moneyCommands,
-									reservation.command,
-									response,
-								),
-								updatedAt: new Date(),
-							};
-						},
-					);
-					return ctx.json(response);
-				} catch (e) {
-					if (e instanceof APIError) throw e;
-					throwAdminOperationError(ctx, e, "void", "VOID_FAILED");
-				}
+						} catch (e) {
+							if (e instanceof APIError) throw e;
+							throwAdminOperationError(ctx, e, "void", "VOID_FAILED");
+						}
+					},
+				);
 			},
 		),
 		bnplAdminClosePayment: createAuthEndpoint(
 			"/bnpl/admin/orders/:orderId/close",
 			{ method: "POST", use: [sessionMiddleware] },
 			async (ctx) => {
-				const { orderId, provider, row } = await loadAdminOrder(
+				const { orderId, provider, where } = await loadAdminOrder(
 					adminOptions,
 					options,
 					ctx,
@@ -1070,94 +902,44 @@ export const admin = (adminOptions: AdminSubpluginOptions) => {
 						code: "OPERATION_NOT_SUPPORTED",
 					});
 				}
-				let verifyOnly = false;
-				const reservation = await reserveMoneyCommand<OrderRow>(
+				return runAdminCommand(
 					ctx,
-					() => adminOrderWhere(row),
-					"close",
-					orderId,
-					{},
-					(current) => {
-						verifyOnly = hasNothingLeftToClose(current);
+					{
+						where,
+						operation: "close",
+						reference: orderId,
+						input: {},
+						onPending: "verify",
+						check: (order) => ({ alreadySettled: hasNothingLeftToClose(order) }),
 					},
-					true,
-				);
-				if (reservation.kind === "completed") return ctx.json(reservation.result);
-				try {
-					if (reservation.kind === "reserved" && !verifyOnly)
-						await sendReservedCommand(
-							ctx,
-							() => adminOrderWhere(row),
-							reservation.command,
-							() => closePayment(orderId, { logger: ctx.context.logger }),
-							reportsAlreadyClosed,
-						);
-					const remote = await provider.fetchOrder(orderId, { logger: ctx.context.logger });
-					const response = { orderId, closed: true };
-					await mutateOrder<OrderRow>(
-						ctx,
-						() => adminOrderWhere(row),
-						(current) => {
-							if (
-								remote.capturedAmountMinor < current.capturedAmountMinor ||
-								remote.refundedAmountMinor < current.refundedAmountMinor ||
-								(remote.canceledAmountMinor ?? 0) < (current.canceledAmountMinor ?? 0)
-							)
-								throw new APIError("CONFLICT", {
-									message: "Close verification snapshot is older than current financial state",
-									code: "MONEY_COMMAND_CONFLICT",
-								});
-							const { captured, refunded, canceled, keys } = readRemoteHistory(
-								provider,
-								current,
-								remote,
-							);
-							const rawClosed =
-								remote.raw !== null &&
-								typeof remote.raw === "object" &&
-								"status" in remote.raw &&
-								remote.raw.status === "CLOSED";
-							if (
-								remote.status !== "closed" &&
-								!(
-									rawClosed &&
-									["fully_captured", "partially_refunded", "fully_refunded", "canceled"].includes(
-										remote.status,
-									)
-								)
-							)
-								throw new APIError("CONFLICT", {
-									code: "MONEY_COMMAND_CONFLICT",
-									message: "Close outcome is uncertain; verify payment closure before retrying",
-								});
-							const candidate = statusFromBalances(remote.status, {
-								amountMinor: current.amountMinor,
-								captured,
-								refunded,
-								canceled,
+					async (command) => {
+						try {
+							if (command.state === "reserved" && !command.checked?.alreadySettled)
+								await command.send(
+									() => closePayment(orderId, { logger: ctx.context.logger }),
+									reportsAlreadyClosed,
+								);
+							const remote = await provider.fetchOrder(orderId, { logger: ctx.context.logger });
+							const response = { orderId, closed: true };
+							return await command.settle((order) => {
+								if (snapshotIsBehind(order, remote))
+									throw verificationConflict(
+										"Close verification snapshot is older than current financial state",
+									);
+								const imported = importSnapshot(order, provider, remote);
+								if (!confirmsClosure(remote))
+									throw verificationConflict(
+										"Close outcome is uncertain; verify payment closure before retrying",
+									);
+								return { response, patch: imported };
 							});
-							return {
-								status: canTransition(current.status, candidate) ? candidate : current.status,
-								capturedAmountMinor: captured,
-								refundedAmountMinor: refunded,
-								canceledAmountMinor: canceled,
-								appliedOperations: JSON.stringify(keys),
-								moneyCommands: completeMoneyCommand(
-									current.moneyCommands,
-									reservation.command,
-									response,
-								),
-								updatedAt: new Date(),
-							};
-						},
-					);
-					return ctx.json(response);
-				} catch (e) {
-					if (reservation.kind === "reserved" && verifyOnly)
-						await tryReleaseReservation(ctx, () => adminOrderWhere(row), reservation.command);
-					if (e instanceof APIError) throw e;
-					throwAdminOperationError(ctx, e, "close-payment", "CLOSE_PAYMENT_FAILED");
-				}
+						} catch (e) {
+							if (command.checked?.alreadySettled) await command.release();
+							if (e instanceof APIError) throw e;
+							throwAdminOperationError(ctx, e, "close-payment", "CLOSE_PAYMENT_FAILED");
+						}
+					},
+				);
 			},
 		),
 	});

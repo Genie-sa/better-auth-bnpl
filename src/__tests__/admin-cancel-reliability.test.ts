@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { BnplProviderError } from "../core/errors";
 import type { BnplProvider } from "../core/provider";
 import type { BnplCancelResult, BnplOrderState } from "../core/types";
 import { bnpl } from "../plugin";
@@ -12,6 +13,15 @@ async function setup(result: BnplCancelResult | undefined, overrides: Partial<Bn
 			providers: {
 				[overrides.id ?? "tamara"]: stubProvider(overrides.id ?? "tamara", {
 					cancel: post,
+					...(overrides.id === "tabby"
+						? {
+								capabilities: {
+									...stubProvider("tabby").capabilities,
+									closePayment: true,
+									cancelClosesPayment: true,
+								},
+							}
+						: {}),
 					...overrides,
 				}),
 			},
@@ -100,7 +110,12 @@ describe("admin cancellation financial balance", () => {
 	});
 	it("preserves legacy cancellation status without inventing a financial operation", async () => {
 		const { row, cancel } = await setup(undefined, {
-			fetchOrder: async () => ({ ...remote(), status: "canceled", raw: { status: "CLOSED" } }),
+			fetchOrder: async () => ({
+				...remote(),
+				status: "canceled",
+				closed: true,
+				raw: { status: "CLOSED" },
+			}),
 		});
 		expect((await cancel("", "")).error).toBeNull();
 		expect(row.status).toBe("canceled");
@@ -124,6 +139,30 @@ function remote(canceledAmountMinor = 0): BnplOrderState {
 	};
 }
 describe("durable admin cancellation commands", () => {
+	it("frees a cancellation the provider refused outright so the same reference can retry", async () => {
+		const { cancel, post, row } = await setup(partial);
+		post.mockRejectedValueOnce(
+			new BnplProviderError("tamara", "refused", { status: 400, rejected: true }),
+		);
+		expect((await cancel()).error?.status).toBe(502);
+		expect((await cancel()).error).toBeNull();
+		expect(post).toHaveBeenCalledTimes(2);
+		expect(row.canceledAmountMinor).toBe(2500);
+	});
+	it("keeps a cancellation with an uncertain outcome pending for verification", async () => {
+		const { cancel, post, instance } = await setup(partial, {
+			fetchOrder: async () => {
+				throw new Error("native history unavailable");
+			},
+		});
+		post.mockRejectedValueOnce(new BnplProviderError("tamara", "gateway", { status: 503 }));
+		expect((await cancel()).error?.status).toBe(502);
+		expect((await cancel()).error?.status).toBe(409);
+		expect(post).toHaveBeenCalledTimes(1);
+		expect(JSON.parse(String(instance.db.bnplOrder?.[0]?.moneyCommands))).toEqual([
+			expect.objectContaining({ state: "pending" }),
+		]);
+	});
 	it("requires an explicit reference before an amount-bearing POST", async () => {
 		const { cancel, post } = await setup(partial);
 		expect((await cancel("25.00", "")).error?.status).toBe(400);
@@ -273,6 +312,7 @@ describe("cancellation recovery evidence", () => {
 			status: "closed",
 			capturedAmountMinor: 2500,
 			operations: [{ kind: "captured", id: "capture-a", amountMinor: 2500, currency: "SAR" }],
+			closed: true,
 			raw: { status: "CLOSED" },
 		};
 		const { row, cancel, post } = await setup(undefined, {
@@ -304,6 +344,7 @@ describe("Tabby cancellation closure aliases", () => {
 				capturedAmountMinor: captured,
 				refundedAmountMinor: refunded,
 				operations: undefined,
+				closed: true,
 				raw: { status: "CLOSED" },
 			}));
 			const { row, cancel, post } = await setup(undefined, { id: "tabby", fetchOrder: get });
@@ -334,6 +375,7 @@ describe("Tabby cancellation closure aliases", () => {
 				...remote(),
 				status: "canceled",
 				operations: undefined,
+				closed: true,
 				raw: { status: "CLOSED" },
 			}),
 		});
@@ -356,6 +398,7 @@ describe("Tabby cancellation closure aliases", () => {
 					...remote(),
 					status: "canceled",
 					operations: undefined,
+					closed: true,
 					raw: { status: "CLOSED" },
 				};
 			},

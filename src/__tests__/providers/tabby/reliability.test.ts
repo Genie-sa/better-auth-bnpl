@@ -494,4 +494,22 @@ describe("Tabby checkout financial identity", () => {
 			expect(fetch).not.toHaveBeenCalled();
 		},
 	);
+	it.each([500, 503])(
+		"rejects a cancel whose preflight read fails with %i, since nothing was sent",
+		async (status) => {
+			const methods: string[] = [];
+			const provider = tabby({
+				...config,
+				fetch: async (_url, init) => {
+					methods.push(init?.method ?? "GET");
+					return new Response(JSON.stringify({ error: "unavailable" }), { status });
+				},
+			});
+			const error = await provider
+				.cancel("payment", { totalAmount: { amount: "75.00", currency: "SAR" } }, ctx)
+				.catch((cause: unknown) => cause);
+			expect(isDefinitiveRejection(error)).toBe(true);
+			expect(methods.every((method) => method === "GET")).toBe(true);
+		},
+	);
 });

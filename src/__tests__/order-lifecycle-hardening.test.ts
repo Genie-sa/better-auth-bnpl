@@ -43,6 +43,8 @@ async function setup(
 			separateAuthorise: providerId === "tamara",
 			voidCheckout: true,
 			closePayment: true,
+			partialCancel: providerId === "tamara",
+			cancelClosesPayment: providerId === "tabby",
 		},
 		verifyWebhook: async (request) => ({
 			ok: true,
@@ -306,6 +308,7 @@ describe("cancellation after partial capture", () => {
 			status: "closed",
 			capturedAmountMinor: 6000,
 			operations: [{ kind: "captured", id: "capture-1", amountMinor: 6000, currency: "SAR" }],
+			closed: true,
 			raw: { status: "CLOSED" },
 		});
 		const cancel = vi.fn(async () => undefined);
@@ -392,6 +395,7 @@ describe("verification-only commands", () => {
 				{ kind: "captured", id: "capture-1", amountMinor: 6000, currency: "SAR" },
 				{ kind: "refunded", id: "refund-1", amountMinor: 6000, currency: "SAR" },
 			],
+			closed: true,
 			raw: { status: "CLOSED" },
 		});
 		const closePayment = vi.fn(async () => undefined);

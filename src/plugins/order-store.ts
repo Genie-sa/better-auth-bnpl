@@ -81,21 +81,3 @@ export function readAppliedOperations(value?: string | null): string[] {
 	}
 	return parsed;
 }
-
-export async function applyOrderOperation<Row extends Versioned>(
-	ctx: GenericEndpointContext,
-	where: OrderWhere,
-	operationKey: string,
-	compute: (row: Row) => Record<string, unknown> | null,
-): Promise<MutateResult<Row> & { duplicate: boolean }> {
-	let duplicate = false;
-	const result = await mutateOrder<Row>(ctx, where, (row) => {
-		const operations = readAppliedOperations(row.appliedOperations);
-		duplicate = operations.includes(operationKey);
-		if (duplicate) return null;
-		const update = compute(row);
-		if (update === null) return null;
-		return { ...update, appliedOperations: JSON.stringify([...operations, operationKey]) };
-	});
-	return { ...result, duplicate };
-}

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { BnplProviderError } from "../core/errors";
 import type { BnplProvider } from "../core/provider";
 import type { BnplOrderState } from "../core/types";
 import { bnpl } from "../plugin";
@@ -17,6 +18,7 @@ function snapshot(
 		capturedAmountMinor: 0,
 		refundedAmountMinor: 0,
 		operations: [],
+		closed: status === "closed",
 		raw: { status: status === "closed" ? "CLOSED" : "AUTHORIZED" },
 		...overrides,
 	};
@@ -146,6 +148,7 @@ describe("durable void and close commands", () => {
 					snapshot(status, {
 						capturedAmountMinor: capture ? 10000 : 0,
 						canceledAmountMinor: capture ? 0 : 10000,
+						closed: true,
 						raw: { status: "CLOSED" },
 						operations: [
 							{
@@ -232,6 +235,7 @@ describe("durable void and close commands", () => {
 	it.each([
 		snapshot("canceled", {
 			canceledAmountMinor: 10000,
+			closed: true,
 			raw: { status: "CLOSED" },
 			operations: [
 				{ id: "closed-remainder", kind: "canceled", amountMinor: 10000, currency: "SAR" },
@@ -239,6 +243,7 @@ describe("durable void and close commands", () => {
 		}),
 		snapshot("fully_captured", {
 			capturedAmountMinor: 10000,
+			closed: true,
 			raw: { status: "CLOSED" },
 			operations: [{ id: "closed-capture", kind: "captured", amountMinor: 10000, currency: "SAR" }],
 		}),
@@ -330,6 +335,7 @@ describe("durable void and close commands", () => {
 		snapshot("fully_captured", {
 			capturedAmountMinor: 10000,
 			operations: undefined,
+			closed: true,
 			raw: { status: "CLOSED" },
 		}),
 	])("does not complete close from malformed GET %j", async (remote) => {
@@ -369,6 +375,7 @@ describe("durable void and close commands", () => {
 				snapshot("partially_refunded", {
 					capturedAmountMinor: 10000,
 					refundedAmountMinor: 2500,
+					closed: true,
 					raw: { status: "CLOSED" },
 					operations: [
 						{ id: "capture", kind: "captured", amountMinor: 10000, currency: "SAR" },
@@ -444,4 +451,25 @@ describe("void response currency corroboration", () => {
 		expect(row.capturedAmountMinor).toBe(0);
 		expect(row.status).toBe("expired");
 	});
+	it.each(["void", "close"] as const)(
+		"frees a %s the provider refused outright so it can be retried",
+		async (operation) => {
+			const mutation = vi
+				.fn<() => Promise<undefined>>()
+				.mockRejectedValueOnce(
+					new BnplProviderError("tabby", "refused", { status: 400, rejected: true }),
+				)
+				.mockResolvedValue(undefined);
+			const { post, row } = await setup({
+				[operation === "void" ? "voidCheckout" : "closePayment"]: mutation,
+				fetchOrder: async () => snapshot(operation === "void" ? "canceled" : "closed"),
+			});
+			expect((await post(operation)).error?.status).toBe(502);
+			expect((await post(operation)).error).toBeNull();
+			expect(mutation).toHaveBeenCalledTimes(2);
+			expect(JSON.parse(String((row as Record<string, unknown>).moneyCommands))).toEqual([
+				expect.objectContaining({ state: "completed" }),
+			]);
+		},
+	);
 });

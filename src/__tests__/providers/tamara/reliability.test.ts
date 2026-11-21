@@ -58,6 +58,46 @@ const order = {
 };
 const providerReturning = (body: unknown) =>
 	tamara({ ...config, fetch: async () => Response.json(body) });
+function nativeOrder(refunds: { id: string; amount: string }[]) {
+	const refundedMinor = refunds.reduce(
+		(sum, refund) => sum + Math.round(Number(refund.amount) * 100),
+		0,
+	);
+	return {
+		...order,
+		status:
+			refundedMinor === 0
+				? "fully_captured"
+				: refundedMinor === 10000
+					? "fully_refunded"
+					: "partially_refunded",
+		refunded_amount: { ...money, amount: (refundedMinor / 100).toFixed(2) },
+		transactions: {
+			captures: [{ capture_id: "capture-1", order_id: "order-1", total_amount: money }],
+			refunds: refunds.map((refund) => ({
+				refund_id: refund.id,
+				capture_id: "capture-1",
+				total_amount: { ...money, amount: refund.amount },
+				refund_status: "success",
+			})),
+			cancels: [],
+		},
+	};
+}
+/** Serves native history before the refund on the first read and the given history afterwards. */
+function refundingProvider(response: unknown, before: unknown, after: unknown) {
+	const methods: string[] = [];
+	const provider = tamara({
+		...config,
+		fetch: async (_url, init) => {
+			methods.push(init?.method ?? "GET");
+			if (init?.method !== "GET") return Response.json(response);
+			const body = methods.filter((method) => method === "GET").length === 1 ? before : after;
+			return body instanceof Response ? body : Response.json(body);
+		},
+	});
+	return { provider, methods };
+}
 
 afterEach(() => vi.useRealTimers());
 
@@ -485,46 +525,116 @@ describe("Tamara financial contracts", () => {
 	])(
 		"verifies the native refund when the API returns cumulative totals %j",
 		async ({ requested, cumulative, status }) => {
-			const fetch = vi.fn(async (_url, options) =>
-				Response.json(
-					options?.method === "GET"
-						? {
-								...order,
-								status,
-								refunded_amount: { ...money, amount: cumulative },
-								transactions: {
-									captures: [{ capture_id: "capture-1", order_id: "order-1", total_amount: money }],
-									refunds: [
-										{
-											refund_id: "previous",
-											capture_id: "capture-1",
-											total_amount: { ...money, amount: "25.00" },
-											refund_status: "success",
-										},
-										{
-											refund_id: "current",
-											capture_id: "capture-1",
-											total_amount: { ...money, amount: requested },
-											refund_status: "success",
-										},
-									],
-								},
-							}
-						: {
-								order_id: "order-1",
-								refund_id: "current",
-								status,
-								refunded_amount: { ...money, amount: cumulative },
-							},
-				),
+			const previous = { id: "previous", amount: "25.00" };
+			const { provider, methods } = refundingProvider(
+				{
+					order_id: "order-1",
+					refund_id: "current",
+					status,
+					refunded_amount: { ...money, amount: cumulative },
+				},
+				nativeOrder([previous]),
+				nativeOrder([previous, { id: "current", amount: requested }]),
 			);
-			const provider = tamara({ ...config, fetch });
 			await expect(
 				provider.refund("order-1", { totalAmount: { ...money, amount: requested } }, ctx),
-			).resolves.toMatchObject({ refundId: "current", amountMinor: Number(requested) * 100 });
-			expect(fetch).toHaveBeenCalledTimes(2);
+			).resolves.toMatchObject({
+				refundId: "current",
+				amountMinor: Number(requested) * 100,
+				operations: [{ id: "current", kind: "refunded", amountMinor: Number(requested) * 100 }],
+			});
+			expect(methods).toEqual(["GET", "POST", "GET"]);
 		},
 	);
+	it("keeps a single-refund response uncertain when native history gained more refunds", async () => {
+		const { provider } = refundingProvider(
+			{
+				order_id: "order-1",
+				refund_id: "split-b",
+				status: "fully_refunded",
+				refunded_amount: { ...money, amount: "40.00" },
+			},
+			nativeOrder([]),
+			nativeOrder([
+				{ id: "split-a", amount: "60.00" },
+				{ id: "split-b", amount: "40.00" },
+			]),
+		);
+		const error = await provider
+			.refund("order-1", { totalAmount: money }, ctx)
+			.catch((cause) => cause);
+		expect(error).toMatchObject({ name: "BnplProviderError", rejected: false });
+		expect(isDefinitiveRejection(error)).toBe(false);
+	});
+	it("accepts the per-capture response Tamara sends for a refund spanning captures", async () => {
+		const { provider } = refundingProvider(
+			{
+				order_id: "order-1",
+				comment: "Refund",
+				refunds: [
+					{
+						refund_id: "split-a",
+						capture_id: "capture-1",
+						status: "partially_refunded",
+						refunded_amount: { amount: 70, currency: "SAR" },
+					},
+					{
+						refund_id: "split-b",
+						capture_id: "capture-2",
+						status: "partially_refunded",
+						refunded_amount: { amount: 70, currency: "SAR" },
+					},
+				],
+			},
+			nativeOrder([]),
+			nativeOrder([
+				{ id: "split-a", amount: "60.00" },
+				{ id: "split-b", amount: "10.00" },
+			]),
+		);
+		await expect(
+			provider.refund("order-1", { totalAmount: { ...money, amount: "70.00" } }, ctx),
+		).resolves.toMatchObject({
+			refundId: "split-a",
+			amountMinor: 7000,
+			operations: [
+				{ id: "split-a", amountMinor: 6000 },
+				{ id: "split-b", amountMinor: 1000 },
+			],
+		});
+	});
+	it("keeps a split refund uncertain when native history holds an unreported refund", async () => {
+		const { provider } = refundingProvider(
+			{
+				order_id: "order-1",
+				refunds: [
+					{
+						refund_id: "split-a",
+						capture_id: "capture-1",
+						status: "partially_refunded",
+						refunded_amount: { amount: 70, currency: "SAR" },
+					},
+				],
+			},
+			nativeOrder([]),
+			nativeOrder([
+				{ id: "split-a", amount: "60.00" },
+				{ id: "unreported", amount: "10.00" },
+			]),
+		);
+		const error = await provider
+			.refund("order-1", { totalAmount: { ...money, amount: "70.00" } }, ctx)
+			.catch((cause) => cause);
+		expect(isDefinitiveRejection(error)).toBe(false);
+	});
+	it("rejects a refund before dispatch when its baseline cannot be read", async () => {
+		const { provider, methods } = refundingProvider({}, {}, {});
+		const error = await provider
+			.refund("order-1", { totalAmount: money }, ctx)
+			.catch((cause) => cause);
+		expect(isDefinitiveRejection(error)).toBe(true);
+		expect(methods).toEqual(["GET"]);
+	});
 	it("keeps a cumulative refund uncertain when its native operation cannot be corroborated", async () => {
 		const fetch = vi.fn(async (_url, options) =>
 			Response.json(
@@ -582,12 +692,16 @@ describe("Tamara financial contracts", () => {
 			}).capture("order-1", captureArgs, ctx),
 		).resolves.toMatchObject({ amountMinor: 10000 });
 		await expect(
-			providerReturning({
-				refund_id: "refund-1",
-				order_id: "order-1",
-				status: "fully_refunded",
-				refunded_amount: money,
-			}).refund("order-1", { totalAmount: money }, ctx),
+			refundingProvider(
+				{
+					refund_id: "refund-1",
+					order_id: "order-1",
+					status: "fully_refunded",
+					refunded_amount: money,
+				},
+				nativeOrder([]),
+				nativeOrder([{ id: "refund-1", amount: "100.00" }]),
+			).provider.refund("order-1", { totalAmount: money }, ctx),
 		).resolves.toMatchObject({ amountMinor: 10000 });
 	});
 	it.each(["-1.00", "0.001", "not-money"])(
@@ -980,9 +1094,10 @@ describe("Tamara post-dispatch corroboration failures", () => {
 				...config,
 				fetch: async (_url, init) => {
 					methods.push(init?.method ?? "GET");
-					return init?.method === "GET"
-						? Response.json({ message: "unavailable" }, { status })
-						: Response.json(cumulativeResponse[operation]);
+					if (init?.method !== "GET") return Response.json(cumulativeResponse[operation]);
+					return operation === "refund" && !methods.includes("POST")
+						? Response.json(nativeOrder([]))
+						: Response.json({ message: "unavailable" }, { status });
 				},
 			});
 			const partial = { totalAmount: { ...money, amount: "25.00" } };
@@ -992,7 +1107,148 @@ describe("Tamara post-dispatch corroboration failures", () => {
 			).catch((cause: unknown) => cause);
 			expect(error).toMatchObject({ name: "BnplProviderError" });
 			expect(isDefinitiveRejection(error)).toBe(false);
-			expect(methods).toEqual(["POST", "GET"]);
+			expect(methods).toEqual(operation === "refund" ? ["GET", "POST", "GET"] : ["POST", "GET"]);
 		},
 	);
+});
+
+describe("Tamara refusals recorded from the sandbox", () => {
+	const transitionRefusal = {
+		message: "The order order-1 cannot be moved to the status fully_captured from new",
+		errors: [
+			{
+				error_code: "transition_not_allowed",
+				data: { order_id: "order-1", old_state: "new", new_state: "fully_captured" },
+			},
+		],
+		data: { capture_ids: [] },
+	};
+	it("treats a state-machine refusal as a definitive rejection", async () => {
+		const provider = tamara({
+			...config,
+			fetch: async () => Response.json(transitionRefusal, { status: 409 }),
+		});
+		const error = await provider.capture("order-1", captureArgs, ctx).catch((cause) => cause);
+		expect(error).toMatchObject({ name: "BnplProviderError", status: 409, rejected: true });
+		expect(isDefinitiveRejection(error)).toBe(true);
+	});
+	it("keeps any other conflict uncertain", async () => {
+		const provider = tamara({
+			...config,
+			fetch: async () => Response.json({ message: "conflict" }, { status: 409 }),
+		});
+		const error = await provider.capture("order-1", captureArgs, ctx).catch((cause) => cause);
+		expect(isDefinitiveRejection(error)).toBe(false);
+	});
+	it("keeps a corroborated cancellation with an unexpected status uncertain", async () => {
+		const provider = tamara({
+			...config,
+			fetch: async () =>
+				Response.json({
+					order_id: "order-1",
+					cancel_id: "cancel-1",
+					status: "on_hold",
+					canceled_amount: { ...money, amount: "30.00" },
+				}),
+		});
+		const error = await provider
+			.cancel("order-1", { totalAmount: { ...money, amount: "30.00" } }, ctx)
+			.catch((cause) => cause);
+		expect(error).toMatchObject({ name: "BnplProviderError", rejected: false });
+		expect(isDefinitiveRejection(error)).toBe(false);
+	});
+});
+
+describe("Tamara cumulative capture totals recorded from the sandbox", () => {
+	const snapshot = {
+		...order,
+		status: "fully_captured",
+		total_amount: money,
+		captured_amount: { ...money, amount: "75.00" },
+		canceled_amount: { ...money, amount: "25.00" },
+		transactions: {
+			captures: [
+				{ capture_id: "first", order_id: "order-1", total_amount: { ...money, amount: "25.00" } },
+				{ capture_id: "second", order_id: "order-1", total_amount: { ...money, amount: "50.00" } },
+			],
+			refunds: [],
+			cancels: [{ cancel_id: "cancel", total_amount: { ...money, amount: "25.00" } }],
+		},
+	};
+	const cumulativeCapture = {
+		order_id: "order-1",
+		capture_id: "second",
+		status: "fully_captured",
+		captured_amount: { ...money, amount: "75.00" },
+	};
+	const partial = { ...captureArgs, totalAmount: { ...money, amount: "50.00" } };
+	it("confirms a second partial capture from its native transaction", async () => {
+		const methods: string[] = [];
+		const provider = tamara({
+			...config,
+			fetch: async (_url, init) => {
+				methods.push(init?.method ?? "GET");
+				return Response.json(init?.method === "GET" ? snapshot : cumulativeCapture);
+			},
+		});
+		await expect(provider.capture("order-1", partial, ctx)).resolves.toMatchObject({
+			captureId: "second",
+			amountMinor: 5000,
+		});
+		expect(methods).toEqual(["POST", "GET"]);
+	});
+	it("keeps an accepted capture uncertain when its native transaction disagrees", async () => {
+		const provider = tamara({
+			...config,
+			fetch: async (_url, init) =>
+				Response.json(
+					init?.method === "GET"
+						? {
+								...snapshot,
+								transactions: {
+									...snapshot.transactions,
+									captures: [snapshot.transactions.captures[0]],
+								},
+							}
+						: cumulativeCapture,
+				),
+		});
+		const error = await provider.capture("order-1", partial, ctx).catch((cause) => cause);
+		expect(error).toMatchObject({ name: "BnplProviderError", rejected: false });
+		expect(isDefinitiveRejection(error)).toBe(false);
+	});
+});
+
+describe("Tamara pre-dispatch failures", () => {
+	it.each([500, 503, 429])(
+		"rejects a refund whose baseline read fails with %i, since nothing was sent",
+		async (status) => {
+			const { provider, methods } = refundingProvider(
+				{},
+				Response.json({ message: "unavailable" }, { status }),
+				{},
+			);
+			const error = await provider
+				.refund("order-1", { totalAmount: money }, ctx)
+				.catch((cause) => cause);
+			expect(isDefinitiveRejection(error)).toBe(true);
+			expect(methods).not.toContain("POST");
+		},
+	);
+	it("rejects a capture whose request body fails validation before it is sent", async () => {
+		const fetch = vi.fn(async () => Response.json({}));
+		const provider = tamara({ ...config, fetch });
+		const error = await provider
+			.capture(
+				"order-1",
+				{
+					...captureArgs,
+					shippingInfo: { ...captureArgs.shippingInfo, shippingCompany: "x".repeat(300) },
+				},
+				ctx,
+			)
+			.catch((cause) => cause);
+		expect(fetch).not.toHaveBeenCalled();
+		expect(isDefinitiveRejection(error)).toBe(true);
+	});
 });

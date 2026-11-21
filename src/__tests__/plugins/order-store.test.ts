@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	OrderStoreConflictError,
 	OrderStoreMissingError,
-	applyOrderOperation,
 	mutateOrder,
 } from "../../plugins/order-store";
 import { silentLogger } from "../_harness";
@@ -112,21 +111,6 @@ describe("mutateOrder optimistic concurrency", () => {
 			capturedAmountMinor: current.capturedAmountMinor + 1000,
 		}));
 		expect(row().capturedAmountMinor).toBe(4000);
-	});
-	it("commits an operation identity with its balance and skips a replay", async () => {
-		const { ctx, row } = makeFakeCtx(base);
-		const compute = (current: OrderRow) => ({
-			capturedAmountMinor: current.capturedAmountMinor + 5000,
-		});
-		await applyOrderOperation<OrderRow>(ctx, orderWhere(base), "tabby:captured:cap-1", compute);
-		const replay = await applyOrderOperation<OrderRow>(
-			ctx,
-			orderWhere(base),
-			"tabby:captured:cap-1",
-			compute,
-		);
-		expect(row().capturedAmountMinor).toBe(5000);
-		expect(replay.duplicate).toBe(true);
 	});
 	it("applies an update and rotates the version token with no contention", async () => {
 		const { ctx, row, updateManyCalls } = makeFakeCtx(base);
