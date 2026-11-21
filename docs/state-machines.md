@@ -12,8 +12,8 @@ All persisted state lives on two rows:
 | M1 | Order status | `bnplOrder.status` | Explicit table | [`src/core/status.ts`](../src/core/status.ts) |
 | M2 | Order version (optimistic concurrency) | `bnplOrder.version` | Implicit | [`src/plugins/order-store.ts`](../src/plugins/order-store.ts) |
 | M3 | Checkout attempt | `bnplOrder.checkoutAttempt` | Implicit | [`src/plugins/checkout-attempt.ts`](../src/plugins/checkout-attempt.ts) |
-| M4 | Money command journal | `bnplOrder.moneyCommands` | Implicit | [`src/plugins/money-command.ts`](../src/plugins/money-command.ts) |
-| M5 | Operation ledger and delivery markers | `bnplOrder.appliedOperations`, `webhookTransitions` | Implicit | [`src/plugins/webhooks.ts`](../src/plugins/webhooks.ts), [`src/plugins/remote-history.ts`](../src/plugins/remote-history.ts) |
+| M4 | Money command journal | `bnplOrder.moneyCommands` | Implicit | [`src/plugins/money-command.ts`](../src/plugins/money-command.ts) `runMoneyCommand` |
+| M5 | Operation ledger and delivery markers | `bnplOrder.appliedOperations`, `webhookTransitions` | Implicit | [`src/plugins/order.ts`](../src/plugins/order.ts), [`src/core/ledger.ts`](../src/core/ledger.ts) |
 | M6 | Webhook event delivery | `bnplWebhookEvent.status`, `processingToken`, `processingUntil` | Implicit | [`src/plugins/webhook-events.ts`](../src/plugins/webhook-events.ts) |
 | M7 | Webhook delivery checkpoint | `bnplWebhookEvent.deliveryState` | Implicit | [`src/plugins/webhooks.ts`](../src/plugins/webhooks.ts) `processDelivery` |
 | M8 | Provider native status mapping | Tabby and Tamara responses | Explicit mapping | [`src/providers/tabby/adapter.ts`](../src/providers/tabby/adapter.ts), [`src/providers/tamara/index.ts`](../src/providers/tamara/index.ts) |
@@ -66,7 +66,7 @@ Every writer applies `canTransition` before changing the status. The one excepti
 | --- | --- | --- |
 | `updateCheckoutAttempt` | Provider checkout result | Result status (`new` or `declined`) |
 | `persistOrderUpdate` (webhooks) | Each canonical event | Event target; cancellation events use `statusFromBalances` on verified native history |
-| Automatic and admin authorise (`buildAuthoriseOrderUpdate`) | Authorise result | Capture-derived when the response reports a positive capture, otherwise the response status |
+| Automatic and admin authorise (`applyAuthorisation`) | Authorise result | Capture-derived when the response reports a positive capture, otherwise the response status |
 | Authorise recovery, void, close, reconcile, admin cancel | Verified GET or provider result | `statusFromBalances` |
 | `runAutoCapture`, `persistAdminMoneyOperation` | Capture or refund result | Capture- or refund-derived; `closed` stays `closed` until its first refund |
 
@@ -223,10 +223,10 @@ All findings were reviewed by three parties: the original audit, plus independen
 
 | ID | Severity | Finding | Fix | Evidence |
 | --- | --- | --- | --- | --- |
-| F1 | High | A definitive provider rejection (or validation before dispatch) left the journal `pending`, so every later mutation on the order returned 409 forever. Early Tamara authorise blocked the customer's approval permanently. | `sendReservedCommand` releases only the owning reservation on an explicitly marked rejection (M4). Tracked in [#22](https://github.com/Genie-sa/better-auth-bnpl/issues/22). | Sandbox: Tabby close of `CREATED` and Tamara capture without shipping info both wedged the order before the fix; afterwards later commands reached the provider and voids succeeded. |
+| F1 | High | A definitive provider rejection (or validation before dispatch) left the journal `pending`, so every later mutation on the order returned 409 forever. Early Tamara authorise blocked the customer's approval permanently. | `command.send` releases only the owning reservation on an explicitly marked rejection (M4). Tracked in [#22](https://github.com/Genie-sa/better-auth-bnpl/issues/22). | Sandbox: Tabby close of `CREATED` and Tamara capture without shipping info both wedged the order before the fix; afterwards later commands reached the provider and voids succeeded. |
 | F2 | High | A rejected checkout left a phantom `new` row and burned the reference (409 forever). | Discard the reservation on a definitive rejection (M3). Tracked in [#23](https://github.com/Genie-sa/better-auth-bnpl/issues/23). | Sandbox: Tamara unsupported country; afterwards no row remained and corrected input under the same reference succeeded. |
 | F3 | Medium | A Tamara zero-amount cancel (HTTP 200, `status: "new"`) failed schema validation as "unexpected shape" and stayed pending. | Schema accepts the status; a proven no-op (M4) is rejected; everything else stays uncertain. | Sandbox: before, the cancel wedged and void returned 409; afterwards "did not apply the cancellation" and the void succeeded. |
-| F4 | High | A Tabby cancel with an amount closed the payment, then recovery demanded Tamara-style cancel history and wedged the order. | Tabby cancel recovery verifies `CLOSED`, unchanged captures, and that the amount equals the uncaptured balance. | Code path (Neon); regression test |
+| F4 | High | A Tabby cancel with an amount closed the payment, then recovery demanded Tamara-style cancel history and wedged the order. | Cancel recovery for providers whose cancel closes the payment (`cancelClosesPayment`) verifies native closure, unchanged captures, and that the amount equals the uncaptured balance. | Code path (Neon); regression test |
 | F5 | High | On Tamara merchants with automatic authorisation, our authorise call gets `transition_not_allowed` from an already-authorised order. Releasing it would make the `approved` webhook fail forever. | Authorise keeps that refusal pending and verifies through GET. | Tamara docs (automatic authorisation); regression test |
 | F6 | Medium | Tabby's documented 409 lock/dispute refusals on capture and refund stayed pending. | Documented Tabby 409 bodies count as rejections. | Tabby OpenAPI `ConflictError_locked`; regression test |
 | F7 | Medium | Tabby nullable `captures`/`refunds`/`reference_id` failed schema parsing, so snapshot webhooks failed until retries ran out, and fetch/reconcile failed. | Accept `null`. | Tabby OpenAPI; regression test |

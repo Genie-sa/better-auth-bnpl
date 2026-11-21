@@ -1,3 +1,4 @@
+import { brandInstance, recogniseBrand } from "./guards";
 function defineBnplErrorCodes<const T extends Record<string, string>>(
 	messages: T,
 ): {
@@ -68,6 +69,8 @@ export const BNPL_ERROR_CODES = defineBnplErrorCodes({
 	CURRENCY_NOT_SUPPORTED_BY_PROVIDER: "This currency is not supported by the requested provider",
 });
 export type BnplErrorCode = keyof typeof BNPL_ERROR_CODES;
+const PLUGIN_ERROR_BRAND = Symbol.for("better-auth-bnpl.BnplPluginError");
+const PROVIDER_ERROR_BRAND = Symbol.for("better-auth-bnpl.BnplProviderError");
 export class BnplPluginError extends Error {
 	readonly code: BnplErrorCode;
 	/** Validation failed before any provider request was sent. */
@@ -80,12 +83,14 @@ export class BnplPluginError extends Error {
 		init?: { rejected?: boolean },
 	) {
 		super(message ?? BNPL_ERROR_CODES[code].message);
+		brandInstance(this, PLUGIN_ERROR_BRAND);
 		this.name = "BnplPluginError";
 		this.code = code;
 		this.cause = cause;
 		this.rejected = init?.rejected === true;
 	}
 }
+recogniseBrand(BnplPluginError, PLUGIN_ERROR_BRAND);
 export const isBnplPluginError = (e: unknown): e is BnplPluginError => e instanceof BnplPluginError;
 export class BnplProviderError extends Error {
 	readonly provider: string;
@@ -105,6 +110,7 @@ export class BnplProviderError extends Error {
 		},
 	) {
 		super(message);
+		brandInstance(this, PROVIDER_ERROR_BRAND);
 		this.name = "BnplProviderError";
 		this.provider = provider;
 		this.status = init?.status;
@@ -141,6 +147,7 @@ export class BnplProviderError extends Error {
 		return undefined;
 	}
 }
+recogniseBrand(BnplProviderError, PROVIDER_ERROR_BRAND);
 function isErrorBody(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -155,6 +162,15 @@ function providerMessages(body: unknown): string[] {
 }
 export const isBnplProviderError = (e: unknown): e is BnplProviderError =>
 	e instanceof BnplProviderError;
+
+/** Nothing reached the provider's mutation endpoint, so whatever failed had no effect. */
+export function rejectedBeforeDispatch(provider: string, cause: unknown): BnplProviderError {
+	return new BnplProviderError(
+		provider,
+		cause instanceof Error ? cause.message : "request was not sent",
+		{ cause, rejected: true },
+	);
+}
 
 /**
  * True only for errors explicitly marked `rejected`: validation failed before any request, or the

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { BnplPluginError, BnplProviderError } from "../core/errors";
 import { bnpl } from "../plugin";
 import { type CheckoutSubpluginOptions, checkout } from "../plugins/checkout";
 import { makeBnplTestInstance, stubProvider } from "./_harness";
@@ -208,6 +209,23 @@ describe("persisted checkout recovery", () => {
 		});
 		expect((await post()).error).not.toBeNull();
 		expect(createCheckout).not.toHaveBeenCalled();
+	});
+	it.each([
+		[
+			new BnplPluginError("PROVIDER_NOT_AVAILABLE", "tamara: shippingAddress is required"),
+			400,
+			"PROVIDER_NOT_AVAILABLE",
+		],
+		[
+			new BnplProviderError("tabby", "upstream refused", { status: 400 }),
+			502,
+			"CHECKOUT_CREATION_FAILED",
+		],
+		[new Error("socket closed"), 500, "CHECKOUT_CREATION_FAILED"],
+	])("maps a provider checkout failure %# to its HTTP meaning", async (error, status, code) => {
+		const instance = await setup();
+		instance.createCheckout.mockRejectedValueOnce(error);
+		expect((await instance.post()).error).toMatchObject({ status, code });
 	});
 });
 

@@ -1,46 +1,296 @@
-import type { GenericEndpointContext, Where } from "better-auth";
+import type { GenericEndpointContext } from "better-auth";
 import { APIError } from "better-auth/api";
 import { BnplProviderError, isDefinitiveRejection } from "../core/errors";
+import type { BnplProvider } from "../core/provider";
+import { isAuthorisedState } from "../core/status";
+import type { BnplCaptureResult, BnplRefundResult } from "../core/types";
 import { commandInputHash } from "./command-input";
-import type { MoneyOperation } from "./operation-reference";
-import { mutateOrder } from "./order-store";
+import {
+	type OrderBaseline,
+	type OrderRecord,
+	applyMoneyOperations,
+	attributePendingOperations,
+} from "./order";
+import { type OrderWhere, mutateOrder } from "./order-store";
 
-export type JournalOperation = MoneyOperation | "authorise" | "cancel" | "void" | "close";
-export interface CommandBefore {
-	capturedAmountMinor: number;
-	refundedAmountMinor: number;
-	canceledAmountMinor: number;
-	appliedOperations?: string | null;
-}
+export type JournalOperation = "capture" | "refund" | "authorise" | "cancel" | "void" | "close";
 
+/** What the provider confirmed for a pending command, so a retry can verify it without resending. */
 type CommandEvidence = Record<string, number>;
-type Command =
+
+type JournalEntry =
 	| {
 			key: string;
 			hash: string;
 			token?: string;
-			before?: CommandBefore;
+			before?: OrderBaseline;
 			evidence?: CommandEvidence;
 			state: "pending";
 	  }
 	| { key: string; hash: string; state: "completed"; result: Record<string, unknown> };
-interface CommandOrder {
-	id?: string;
-	version?: number | null;
-	moneyCommands?: string | null;
-	capturedAmountMinor?: number;
-	refundedAmountMinor?: number;
-	canceledAmountMinor?: number;
-	appliedOperations?: string | null;
-}
-export interface MoneyCommandReservation {
+
+interface Reservation {
 	key: string;
 	hash: string;
 	token?: string;
-	before?: CommandBefore;
+	before?: OrderBaseline;
 	evidence?: CommandEvidence;
 }
-function readCommands(value?: string | null): Command[] {
+
+export interface MoneyCommandSpec<Checked> {
+	where: OrderWhere;
+	operation: JournalOperation;
+	reference: string;
+	input: unknown;
+	/** Whether an uncertain earlier attempt blocks this request or is handed back for verification. */
+	onPending: "conflict" | "verify";
+	recordBaseline?: boolean;
+	/**
+	 * Validates a new reservation against the latest order inside the reserving write; its result
+	 * reaches the command. A pending command skips it, since its own effect may already be applied.
+	 */
+	check?: (order: OrderRecord) => Checked;
+}
+
+export interface Settlement<Response> {
+	response: Response;
+	patch?: object;
+}
+
+export interface MoneyCommand<Checked> {
+	/** `pending` means an earlier attempt's outcome is unknown: verify it, never send again. */
+	readonly state: "reserved" | "pending";
+	readonly reference: string;
+	readonly baseline?: OrderBaseline;
+	readonly checked: Checked | undefined;
+	readonly evidence?: CommandEvidence;
+	/**
+	 * Sends the provider request once; a provably rejected request frees the reference for a retry,
+	 * unless `recoverable` says the refusal means the target state may already hold.
+	 */
+	send<Result>(
+		request: () => Promise<Result>,
+		recoverable?: (error: unknown) => boolean,
+	): Promise<Result>;
+	/** Frees a reservation whose command sent nothing, such as a failed verification-only retry. */
+	release(): Promise<void>;
+	/** Persists provider-confirmed facts on the pending command for later verification. */
+	recordEvidence(evidence: CommandEvidence): Promise<void>;
+	/**
+	 * Completes the command in the same versioned write as its order change and resolves to its saved
+	 * response, which is another worker's when that worker completed the command first.
+	 */
+	settle<Response extends object>(
+		settlement: (order: OrderRecord) => Settlement<Response>,
+	): Promise<Response>;
+	/** Like `settle`, but a null settlement leaves the command untouched and resolves to undefined. */
+	settleIf<Response extends object>(
+		settlement: (order: OrderRecord) => Settlement<Response> | null,
+	): Promise<Response | undefined>;
+}
+
+/**
+ * Runs a durable money command: one reservation per reference and input, a saved result replayed on
+ * retry, and no provider request while any command on the order is unresolved.
+ */
+export async function runMoneyCommand<Response, Checked = undefined>(
+	ctx: GenericEndpointContext,
+	spec: MoneyCommandSpec<Checked> & {
+		/** Maps the result saved by an earlier completed attempt to this request's response. */
+		replay: (saved: Record<string, unknown>) => Response;
+	},
+	execute: (command: MoneyCommand<Checked>) => Promise<Response>,
+): Promise<Response> {
+	const reserved = await reserve(ctx, spec);
+	if (reserved.kind === "completed") return spec.replay(reserved.result);
+	const { reservation } = reserved;
+	let sent = false;
+	const settleIf = async <Settled extends object>(
+		settlement: (order: OrderRecord) => Settlement<Settled> | null,
+	): Promise<Settled | undefined> => {
+		let response: Settled | undefined;
+		await mutateOrder<OrderRecord>(ctx, spec.where, (order) => {
+			const journal = readJournal(order.moneyCommands);
+			const existing = journal.find((entry) => entry.key === reservation.key);
+			if (existing?.state === "completed") {
+				if (existing.hash !== reservation.hash)
+					conflict("Money command reference was reused with different input");
+				// Another worker completed this command first; its saved result is the only answer.
+				response = existing.result as Settled;
+				return null;
+			}
+			const settled = settlement(order);
+			response = settled?.response;
+			if (!settled) return null;
+			return {
+				updatedAt: new Date(),
+				...settled.patch,
+				moneyCommands: completeEntry(journal, reservation, settled.response),
+			};
+		});
+		return response;
+	};
+	return execute({
+		state: reserved.kind,
+		reference: spec.reference,
+		baseline: reservation.before,
+		checked: reserved.checked,
+		evidence: reservation.evidence,
+		async send(request, recoverable) {
+			if (reserved.kind === "pending" || sent)
+				throw new Error("bnpl: a command whose outcome is uncertain must be verified, not resent");
+			sent = true;
+			try {
+				return await request();
+			} catch (error) {
+				if (isDefinitiveRejection(error) && !recoverable?.(error))
+					await release(ctx, spec.where, reservation);
+				throw error;
+			}
+		},
+		async release() {
+			if (reserved.kind === "reserved" && !sent) await release(ctx, spec.where, reservation);
+		},
+		async recordEvidence(evidence) {
+			await mutateOrder<OrderRecord>(ctx, spec.where, (order) => {
+				const journal = readJournal(order.moneyCommands);
+				const index = journal.findIndex((entry) => entry.key === reservation.key);
+				const existing = journal[index];
+				if (
+					!existing ||
+					existing.state !== "pending" ||
+					existing.hash !== reservation.hash ||
+					existing.token !== reservation.token
+				)
+					throw new Error("bnpl: money command ownership changed");
+				journal[index] = { ...existing, evidence: { ...existing.evidence, ...evidence } };
+				return { moneyCommands: JSON.stringify(journal), updatedAt: new Date() };
+			});
+			reservation.evidence = { ...reservation.evidence, ...evidence };
+		},
+		settleIf,
+		async settle(settlement) {
+			const response = await settleIf(settlement);
+			if (response === undefined)
+				throw new Error("bnpl: money command settlement produced no response");
+			return response;
+		},
+	});
+}
+
+/**
+ * Completes a pending capture or refund from native history, never by resending it. The outcome is
+ * accepted only when the operations native history gained since reservation prove the request.
+ */
+export async function settlePendingMoneyOperation<Kind extends "captured" | "refunded">(
+	ctx: GenericEndpointContext,
+	command: MoneyCommand<unknown>,
+	provider: BnplProvider,
+	order: OrderRecord,
+	kind: Kind,
+	amountMinor: number,
+): Promise<Kind extends "captured" ? BnplCaptureResult : BnplRefundResult> {
+	if (!command.baseline)
+		conflict("Money command outcome is uncertain; reconcile before issuing another command");
+	const remote = await provider.fetchOrder(order.providerOrderId, { logger: ctx.context.logger });
+	const operations = attributePendingOperations(
+		provider,
+		order,
+		command.baseline,
+		remote,
+		kind,
+		amountMinor,
+		command.reference,
+	);
+	const [first] = operations ?? [];
+	if (!operations || !first)
+		conflict("Money command outcome is not uniquely proven by native history; verify it upstream");
+	const common = { providerOrderId: order.providerOrderId, amountMinor, raw: null };
+	const result =
+		kind === "captured"
+			? { ...common, captureId: first.id }
+			: { ...common, refundId: first.id, operations };
+	const settled = await command.settle((latest) => ({
+		response: result,
+		patch: applyMoneyOperations(latest, provider, kind, operations) ?? undefined,
+	}));
+	return settled as Kind extends "captured" ? BnplCaptureResult : BnplRefundResult;
+}
+
+function reportsAlready(states: readonly string[]) {
+	return (error: unknown): boolean =>
+		error instanceof BnplProviderError && error.reportsAlready(states);
+}
+export const reportsAlreadyClosed = reportsAlready(["closed"]);
+export const reportsAlreadyCanceled = reportsAlready(["canceled", "cancelled"]);
+const reportsAlreadyAuthorised = reportsAlready(["authorised", "authorized"]);
+
+/** The provider refused to authorise because the order already is, or has moved past that. */
+export function reportsAuthorisedState(error: unknown): boolean {
+	return (
+		reportsAlreadyAuthorised(error) ||
+		(error instanceof BnplProviderError &&
+			error.conflictingState !== undefined &&
+			isAuthorisedState(error.conflictingState))
+	);
+}
+
+/** The reference automatic capture uses: stable for one remaining balance, distinct once it changes. */
+export function automaticCaptureReference(order: OrderRecord, amountMinor: number): string {
+	return `${automaticCapturePrefix(order)}${(order.capturedAmountMinor ?? 0) + amountMinor}`;
+}
+
+function automaticCapturePrefix(order: OrderRecord): string {
+	return `bnpl:${order.provider}:${order.providerOrderId}:capture:`;
+}
+
+/**
+ * Completes automatic captures left pending by a lost response, from native history. A capture that a
+ * notification already recorded would otherwise block the order once nothing remains to capture.
+ */
+export async function settleLostAutomaticCaptures(
+	ctx: GenericEndpointContext,
+	provider: BnplProvider,
+	order: OrderRecord,
+	where: OrderWhere,
+): Promise<boolean> {
+	const prefix = automaticCapturePrefix(order);
+	let settled = false;
+	for (const entry of readJournal(order.moneyCommands)) {
+		const [operation, reference] = JSON.parse(entry.key) as [string, string];
+		if (
+			entry.state !== "pending" ||
+			!entry.before ||
+			operation !== "capture" ||
+			!reference.startsWith(prefix)
+		)
+			continue;
+		const amountMinor = Number(reference.slice(prefix.length)) - entry.before.capturedAmountMinor;
+		try {
+			await runMoneyCommand<object>(
+				ctx,
+				{
+					where,
+					operation: "capture",
+					reference,
+					input: { amountMinor, currency: order.currency },
+					onPending: "verify",
+					replay: (saved) => saved,
+				},
+				(command) =>
+					settlePendingMoneyOperation(ctx, command, provider, order, "captured", amountMinor),
+			);
+			settled = true;
+		} catch (error) {
+			ctx.context.logger.warn(
+				`bnpl: automatic capture ${reference} remains unresolved: ${error instanceof Error ? error.message : error}`,
+			);
+		}
+	}
+	return settled;
+}
+
+function readJournal(value?: string | null): JournalEntry[] {
 	if (!value) return [];
 	const parsed: unknown = JSON.parse(value);
 	if (
@@ -73,213 +323,106 @@ function readCommands(value?: string | null): Command[] {
 		throw new Error("bnpl: duplicate money commands");
 	return parsed;
 }
+
 function conflict(message: string): never {
 	throw new APIError("CONFLICT", { message, code: "MONEY_COMMAND_CONFLICT" });
 }
-export async function reserveMoneyCommand<Row extends CommandOrder = CommandOrder>(
+
+type Reserved<Checked> =
+	| { kind: "reserved" | "pending"; reservation: Reservation; checked?: Checked }
+	| { kind: "completed"; result: Record<string, unknown> };
+
+async function reserve<Checked>(
 	ctx: GenericEndpointContext,
-	where: () => Where[],
-	operation: JournalOperation,
-	reference: string,
-	body: unknown,
-	validate?: (row: Row) => void,
-	recoverPending = false,
-): Promise<
-	| { kind: "reserved"; command: MoneyCommandReservation }
-	| { kind: "pending"; command: MoneyCommandReservation }
-	| { kind: "completed"; result: Record<string, unknown> }
-> {
-	const key = JSON.stringify([operation, reference]);
-	const hash = commandInputHash(body);
+	spec: MoneyCommandSpec<Checked>,
+): Promise<Reserved<Checked>> {
+	const key = JSON.stringify([spec.operation, spec.reference]);
+	const hash = commandInputHash(spec.input);
 	const token = crypto.randomUUID();
-	let result:
-		| { kind: "reserved"; command: MoneyCommandReservation }
-		| { kind: "pending"; command: MoneyCommandReservation }
-		| { kind: "completed"; result: Record<string, unknown> } = {
-		kind: "reserved",
-		command: { key, hash, token },
-	};
-	await mutateOrder<Row>(ctx, where, (row) => {
-		const commands = readCommands(row.moneyCommands);
-		const existing = commands.find((command) => command.key === key);
+	let reserved: Reserved<Checked> = { kind: "reserved", reservation: { key, hash, token } };
+	await mutateOrder<OrderRecord>(ctx, spec.where, (order) => {
+		const journal = readJournal(order.moneyCommands);
+		const existing = journal.find((entry) => entry.key === key);
 		if (existing) {
 			if (existing.hash !== hash)
 				conflict("Money command reference was already used with different input");
-			if (existing.state === "pending") {
-				if (!recoverPending)
-					conflict("Money command outcome is uncertain; reconcile before issuing another command");
-				result = {
-					kind: "pending",
-					command: {
-						key,
-						hash,
-						token: existing.token,
-						before: existing.before,
-						evidence: existing.evidence,
-					},
-				};
+			if (existing.state === "completed") {
+				reserved = { kind: "completed", result: existing.result };
 				return null;
 			}
-			result = { kind: "completed", result: existing.result };
+			if (spec.onPending === "conflict")
+				conflict("Money command outcome is uncertain; reconcile before issuing another command");
+			reserved = {
+				kind: "pending",
+				reservation: {
+					key,
+					hash,
+					token: existing.token,
+					before: existing.before,
+					evidence: existing.evidence,
+				},
+			};
 			return null;
 		}
-		if (commands.some((command) => command.state === "pending"))
+		if (journal.some((entry) => entry.state === "pending"))
 			conflict("Another order operation is uncertain; verify it before issuing a new command");
-		validate?.(row);
-		const before =
-			operation === "cancel"
-				? {
-						capturedAmountMinor: row.capturedAmountMinor ?? 0,
-						refundedAmountMinor: row.refundedAmountMinor ?? 0,
-						canceledAmountMinor: row.canceledAmountMinor ?? 0,
-						appliedOperations: row.appliedOperations,
-					}
-				: undefined;
-		result = { kind: "reserved", command: { key, hash, token, before } };
+		const checked = spec.check?.(order);
+		const before = spec.recordBaseline
+			? {
+					capturedAmountMinor: order.capturedAmountMinor ?? 0,
+					refundedAmountMinor: order.refundedAmountMinor ?? 0,
+					canceledAmountMinor: order.canceledAmountMinor ?? 0,
+					appliedOperations: order.appliedOperations,
+				}
+			: undefined;
+		reserved = { kind: "reserved", reservation: { key, hash, token, before }, checked };
 		return {
-			moneyCommands: JSON.stringify([...commands, { key, hash, token, before, state: "pending" }]),
+			moneyCommands: JSON.stringify([...journal, { key, hash, token, before, state: "pending" }]),
 			updatedAt: new Date(),
 		};
 	});
-	return result;
+	return reserved;
 }
-export function completeMoneyCommand(
-	value: string | null | undefined,
-	reservation: MoneyCommandReservation,
-	result: Record<string, unknown>,
-): string {
-	const commands = readCommands(value);
-	const index = commands.findIndex((command) => command.key === reservation.key);
-	const existing = commands[index];
-	if (!existing || existing.hash !== reservation.hash)
+
+function completeEntry(journal: JournalEntry[], reservation: Reservation, result: object): string {
+	const index = journal.findIndex((entry) => entry.key === reservation.key);
+	const existing = journal[index];
+	if (!existing || existing.hash !== reservation.hash || existing.state !== "pending")
 		throw new Error("bnpl: money command reservation changed");
-	if (existing.state === "completed") return JSON.stringify(commands);
 	if (existing.token !== reservation.token)
 		throw new Error("bnpl: money command ownership changed");
-	commands[index] = { key: reservation.key, hash: reservation.hash, state: "completed", result };
-	return JSON.stringify(commands);
+	journal[index] = {
+		key: reservation.key,
+		hash: reservation.hash,
+		state: "completed",
+		result: result as Record<string, unknown>,
+	};
+	return JSON.stringify(journal);
 }
 
-/** Persists what the provider confirmed so a retry can verify the outcome without resending. */
-export async function recordCommandEvidence(
+async function release(
 	ctx: GenericEndpointContext,
-	where: () => Where[],
-	reservation: MoneyCommandReservation,
-	evidence: CommandEvidence,
-): Promise<void> {
-	await mutateOrder<CommandOrder>(ctx, where, (row) => {
-		const commands = readCommands(row.moneyCommands);
-		const index = commands.findIndex((command) => command.key === reservation.key);
-		const existing = commands[index];
-		if (
-			!existing ||
-			existing.state !== "pending" ||
-			existing.hash !== reservation.hash ||
-			existing.token !== reservation.token
-		)
-			throw new Error("bnpl: money command ownership changed");
-		commands[index] = { ...existing, evidence: { ...existing.evidence, ...evidence } };
-		return { moneyCommands: JSON.stringify(commands), updatedAt: new Date() };
-	});
-	reservation.evidence = { ...reservation.evidence, ...evidence };
-}
-
-export async function releaseRejectedMoneyCommand(
-	ctx: GenericEndpointContext,
-	where: () => Where[],
-	reservation: MoneyCommandReservation,
-): Promise<void> {
-	await mutateOrder<CommandOrder>(ctx, where, (row) => {
-		const commands = readCommands(row.moneyCommands);
-		const index = commands.findIndex((command) => command.key === reservation.key);
-		const existing = commands[index];
-		if (
-			!existing ||
-			existing.state !== "pending" ||
-			existing.hash !== reservation.hash ||
-			existing.token !== reservation.token
-		)
-			return null;
-		commands.splice(index, 1);
-		return { moneyCommands: JSON.stringify(commands), updatedAt: new Date() };
-	});
-}
-
-/** Best-effort release for a reservation that provably moved no money; failures are logged, not thrown. */
-export async function tryReleaseReservation(
-	ctx: GenericEndpointContext,
-	where: () => Where[],
-	reservation: MoneyCommandReservation,
+	where: OrderWhere,
+	reservation: Reservation,
 ): Promise<void> {
 	try {
-		await releaseRejectedMoneyCommand(ctx, where, reservation);
-	} catch (releaseError) {
+		await mutateOrder<OrderRecord>(ctx, where, (order) => {
+			const journal = readJournal(order.moneyCommands);
+			const index = journal.findIndex((entry) => entry.key === reservation.key);
+			const existing = journal[index];
+			if (
+				!existing ||
+				existing.state !== "pending" ||
+				existing.hash !== reservation.hash ||
+				existing.token !== reservation.token
+			)
+				return null;
+			journal.splice(index, 1);
+			return { moneyCommands: JSON.stringify(journal), updatedAt: new Date() };
+		});
+	} catch (error) {
 		ctx.context.logger.error(
-			`bnpl: could not release command ${reservation.key}: ${releaseError instanceof Error ? releaseError.message : releaseError}`,
+			`bnpl: could not release rejected command ${reservation.key}: ${error instanceof Error ? error.message : error}`,
 		);
 	}
-}
-
-export async function sendReservedCommand<Result>(
-	ctx: GenericEndpointContext,
-	where: () => Where[],
-	reservation: MoneyCommandReservation,
-	request: () => Promise<Result>,
-	isRecoverable: (error: unknown) => boolean = () => false,
-): Promise<Result> {
-	try {
-		return await request();
-	} catch (error) {
-		if (isDefinitiveRejection(error) && !isRecoverable(error))
-			await tryReleaseReservation(ctx, where, reservation);
-		throw error;
-	}
-}
-
-function reportsAlready(states: readonly string[]) {
-	return (error: unknown): boolean =>
-		error instanceof BnplProviderError && error.reportsAlready(states);
-}
-export const reportsAlreadyClosed = reportsAlready(["closed"]);
-export const reportsAlreadyCanceled = reportsAlready(["canceled", "cancelled"]);
-const reportsAlreadyAuthorised = reportsAlready(["authorised", "authorized"]);
-
-export function reportsAuthorisedState(error: unknown): boolean {
-	return (
-		reportsAlreadyAuthorised(error) ||
-		(error instanceof BnplProviderError &&
-			error.conflictingState !== undefined &&
-			isAuthorisedState(error.conflictingState))
-	);
-}
-
-export function isAuthorisedState(status: string): boolean {
-	return [
-		"authorised",
-		"partially_captured",
-		"fully_captured",
-		"partially_refunded",
-		"fully_refunded",
-		"closed",
-		"updated",
-	].includes(status);
-}
-
-export async function recoverLocalAuthoriseCommand<Row extends CommandOrder & { status: string }>(
-	ctx: GenericEndpointContext,
-	where: () => Where[],
-	command: MoneyCommandReservation,
-	orderId: string,
-): Promise<Record<string, unknown> | undefined> {
-	let result: Record<string, unknown> | undefined;
-	await mutateOrder<Row>(ctx, where, (row) => {
-		result = undefined;
-		if (!isAuthorisedState(row.status)) return null;
-		result = { orderId, status: row.status, already: true };
-		return {
-			moneyCommands: completeMoneyCommand(row.moneyCommands, command, result),
-			updatedAt: new Date(),
-		};
-	});
-	return result;
 }

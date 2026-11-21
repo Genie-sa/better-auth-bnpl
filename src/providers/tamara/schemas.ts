@@ -259,14 +259,27 @@ export const tamaraCaptureResponseSchema = z
 		captured_amount: tamaraMoneySchema,
 	})
 	.passthrough();
-export const tamaraSimplifiedRefundResponseSchema = z
+const tamaraRefundEntrySchema = z
 	.object({
 		refund_id: nonEmptyStringSchema,
-		order_id: nonEmptyStringSchema,
 		status: z.enum(["fully_refunded", "partially_refunded"]),
 		refunded_amount: tamaraMoneySchema,
 	})
 	.passthrough();
+export const tamaraSingleRefundResponseSchema = tamaraRefundEntrySchema.extend({
+	order_id: nonEmptyStringSchema,
+});
+/** A refund spanning several captures is answered, undocumented, with one entry per capture. */
+export const tamaraSplitRefundResponseSchema = z
+	.object({
+		order_id: nonEmptyStringSchema,
+		refunds: z.array(tamaraRefundEntrySchema.extend({ capture_id: nonEmptyStringSchema })).min(1),
+	})
+	.passthrough();
+export const tamaraSimplifiedRefundResponseSchema = z.union([
+	tamaraSingleRefundResponseSchema,
+	tamaraSplitRefundResponseSchema,
+]);
 export const tamaraCancelResponseSchema = z
 	.object({
 		order_id: nonEmptyStringSchema,

@@ -1,4 +1,4 @@
-import { BnplPluginError, BnplProviderError } from "../../core/errors";
+import { BnplPluginError, BnplProviderError, rejectedBeforeDispatch } from "../../core/errors";
 import { isMoneyLike, isOneOf, isRecord } from "../../core/guards";
 import { parseJsonObject } from "../../core/json";
 import { type BnplCurrency, formatAmount, isBnplCurrency, parseAmount } from "../../core/money";
@@ -38,7 +38,8 @@ import {
 } from "./adapter";
 import { TamaraClient } from "./client";
 import { TAMARA_COUNTRY_CODES, TAMARA_CURRENCIES, type TamaraLocale } from "./constants";
-import type { TamaraAuthoriseResponse, TamaraMoney, TamaraOrderDetailsResponse } from "./types";
+import { tamaraSingleRefundResponseSchema, tamaraSplitRefundResponseSchema } from "./schemas";
+import type { TamaraAuthoriseResponse, TamaraOrderDetailsResponse } from "./types";
 import {
 	TamaraWebhookVerificationError,
 	extractTamaraToken,
@@ -131,6 +132,14 @@ export function tamara(
 		fetch: options.fetch,
 		timeoutMs: options.preCheckTimeoutMs ?? 200,
 	});
+	/** Nothing has been sent yet, so any failure to read the baseline is a rejection without effect. */
+	async function readStateBeforeDispatch(providerOrderId: string): Promise<BnplOrderState> {
+		try {
+			return readTamaraOrderState(await client.getOrder(providerOrderId), providerOrderId);
+		} catch (cause) {
+			throw rejectedBeforeDispatch("tamara", cause);
+		}
+	}
 	/** The mutation was accepted, so a failed read must stay uncertain rather than look like a rejection. */
 	async function readStateAfterDispatch(
 		providerOrderId: string,
@@ -158,6 +167,8 @@ export function tamara(
 			partialRefund: true,
 			multipleCaptures: true,
 			disputes: false,
+			captureRequiresShipping: true,
+			partialCancel: true,
 		},
 		supportedCountries: TAMARA_COUNTRY_CODES,
 		supportedCurrencies: TAMARA_CURRENCIES,
@@ -208,12 +219,30 @@ export function tamara(
 				},
 			});
 			assertResponseOrderId(response.order_id, providerOrderId, response);
-			const amountMinor = readOperationAmount(
+			const requestedMinor = parseAmount(args.totalAmount);
+			let amountMinor = readResponseMoney(
 				response.captured_amount,
-				args.totalAmount,
+				args.totalAmount.currency,
 				"captured_amount",
 				response,
 			);
+			if (amountMinor !== requestedMinor) {
+				const snapshot = await readStateAfterDispatch(providerOrderId, response);
+				const native = snapshot.operations?.find(
+					(operation) => operation.kind === "captured" && operation.id === response.capture_id,
+				);
+				if (
+					!native ||
+					native.amountMinor !== requestedMinor ||
+					native.currency !== args.totalAmount.currency
+				)
+					throw new BnplProviderError(
+						"tamara",
+						"Tamara capture response could not be corroborated with its native transaction",
+						{ body: response },
+					);
+				amountMinor = native.amountMinor;
+			}
 			ctx.logger.info(
 				`tamara: captured ${args.totalAmount.amount} ${args.totalAmount.currency} for ${providerOrderId} (capture_id=${response.capture_id})`,
 			);
@@ -225,40 +254,55 @@ export function tamara(
 			};
 		},
 		async refund(providerOrderId: string, args: BnplRefundArgs): Promise<BnplRefundResult> {
+			const before = await readStateBeforeDispatch(providerOrderId);
 			const response = await client.simplifiedRefund(providerOrderId, {
 				total_amount: args.totalAmount,
 				comment: args.comment ?? "Refund",
 				merchant_refund_id: args.merchantRefundId,
 			});
 			assertResponseOrderId(response.order_id, providerOrderId, response);
-			const requestedMinor = parseAmount(args.totalAmount);
-			let amountMinor = readResponseMoney(
-				response.refunded_amount,
-				args.totalAmount.currency,
-				"refunded_amount",
-				response,
-			);
-			if (amountMinor !== requestedMinor) {
-				const snapshot = await readStateAfterDispatch(providerOrderId, response);
-				const refund = snapshot.operations?.find(
-					(operation) => operation.kind === "refunded" && operation.id === response.refund_id,
+			const split = tamaraSplitRefundResponseSchema.safeParse(response);
+			const entries = split.success
+				? split.data.refunds
+				: [tamaraSingleRefundResponseSchema.parse(response)];
+			for (const entry of entries)
+				readResponseMoney(
+					entry.refunded_amount,
+					args.totalAmount.currency,
+					"refunded_amount",
+					response,
 				);
-				if (
-					!refund ||
-					refund.amountMinor !== requestedMinor ||
-					refund.currency !== args.totalAmount.currency
-				)
-					throw new BnplProviderError(
-						"tamara",
-						"Tamara refund response could not be corroborated with its native transaction",
-						{ body: response },
-					);
-				amountMinor = refund.amountMinor;
-			}
+			const refundIds = new Set(entries.map((entry) => entry.refund_id));
+			const after = await readStateAfterDispatch(providerOrderId, response);
+			const prior = new Set(
+				(before.operations ?? [])
+					.filter((operation) => operation.kind === "refunded")
+					.map((operation) => operation.id),
+			);
+			const created = (after.operations ?? []).filter(
+				(operation) => operation.kind === "refunded" && !prior.has(operation.id),
+			);
+			const amountMinor = parseAmount(args.totalAmount);
+			const [first] = entries;
+			if (
+				!first ||
+				created.length !== refundIds.size ||
+				created.some(
+					(operation) =>
+						!refundIds.has(operation.id) || operation.currency !== args.totalAmount.currency,
+				) ||
+				created.reduce((sum, operation) => sum + operation.amountMinor, 0) !== amountMinor
+			)
+				throw new BnplProviderError(
+					"tamara",
+					"Tamara refund response could not be corroborated with its native transactions",
+					{ body: response },
+				);
 			return {
-				refundId: response.refund_id,
+				refundId: first.refund_id,
 				providerOrderId: response.order_id,
 				amountMinor,
+				operations: created,
 				raw: response,
 			};
 		},
@@ -450,21 +494,6 @@ function readResponseMoney(
 	} catch (cause) {
 		throw new BnplProviderError("tamara", `Tamara returned invalid ${label}`, { body, cause });
 	}
-}
-function readOperationAmount(
-	money: TamaraMoney,
-	requested: BnplCaptureArgs["totalAmount"],
-	label: string,
-	body: unknown,
-): number {
-	const amountMinor = readResponseMoney(money, requested.currency, label, body);
-	if (amountMinor !== parseAmount(requested))
-		throw new BnplProviderError(
-			"tamara",
-			`Tamara returned ${label} different from the requested amount`,
-			{ body },
-		);
-	return amountMinor;
 }
 function readTamaraAutoCapture(
 	response: TamaraAuthoriseResponse,

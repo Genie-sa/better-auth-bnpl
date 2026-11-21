@@ -3,39 +3,40 @@ import { APIError, createAuthEndpoint, sessionMiddleware } from "better-auth/api
 import { z } from "zod";
 import { BNPL_ERROR_CODES } from "../core/errors";
 import { isRecord } from "../core/guards";
-import {
-	BNPL_CURRENCIES,
-	extractMinorAmount,
-	formatAmount,
-	isBnplCurrency,
-	parseAmount,
-} from "../core/money";
+import { ledgerKeyForEvent } from "../core/ledger";
+import { BNPL_CURRENCIES, formatAmount, parseAmount } from "../core/money";
 import type { BnplProvider } from "../core/provider";
 import {
 	CANONICAL_STATUSES,
 	type CanonicalStatus,
 	canTransition,
-	deriveCapturedStatus,
-	deriveRefundedStatus,
+	isAuthorisedState,
+	isTerminalStatus,
 	statusFromBalances,
 } from "../core/status";
-import type { BnplOrderState, BnplWebhookEvent } from "../core/types";
+import type { BnplCaptureResult, BnplOrderState, BnplWebhookEvent } from "../core/types";
 import type { BnplOptions } from "../plugin-types";
 import { type AdminAuthorizer, assertAdmin } from "./admin";
-import { buildAuthoriseOrderUpdate } from "./authorise-update";
 import {
-	type MoneyCommandReservation,
-	completeMoneyCommand,
-	isAuthorisedState,
-	recoverLocalAuthoriseCommand,
+	automaticCaptureReference,
 	reportsAuthorisedState,
-	reserveMoneyCommand,
-	sendReservedCommand,
+	runMoneyCommand,
+	settleLostAutomaticCaptures,
+	settlePendingMoneyOperation,
 } from "./money-command";
-import { operationReference } from "./operation-reference";
+import {
+	type OrderRecord,
+	addObservedMoney,
+	applyAuthorisation,
+	applyMoneyOperation,
+	capturableMinor,
+	importSnapshot,
+	orderWhere,
+	readRemoteHistory,
+	snapshotIsBehind,
+} from "./order";
 import { OrderStoreMissingError, mutateOrder, readAppliedOperations } from "./order-store";
 import { assertPersistedOrders } from "./persistence";
-import { readRemoteHistory } from "./remote-history";
 import {
 	type StoredWebhookEvent,
 	claimWebhookEvent,
@@ -118,20 +119,6 @@ export interface WebhooksSubpluginOptions extends ProviderSpecificHandlers {
 	onDeclined?: (ctx: DispatchContextOf<"declined">) => Promise<void> | void;
 	onUpdated?: (ctx: DispatchContextOf<"updated">) => Promise<void> | void;
 }
-interface StoredOrder {
-	canceledAmountMinor?: number;
-	canceledAt?: Date | null;
-	provider: string;
-	status: string;
-	amountMinor: number;
-	currency: string;
-	authorisedAt?: Date;
-	capturedAmountMinor: number;
-	refundedAmountMinor: number;
-	version?: number;
-	appliedOperations?: string | null;
-	webhookTransitions?: string | null;
-}
 interface OrderUpdate {
 	status: string;
 	updatedAt: Date;
@@ -143,29 +130,17 @@ interface OrderUpdate {
 	refundedAmountMinor?: number;
 	canceledAmountMinor?: number;
 }
-interface AutoAuthoriseStoredOrder {
-	providerOrderId: string;
-	canceledAmountMinor?: number;
-	status: string;
-	authorisedAt?: Date;
-	amountMinor: number;
-	capturedAmountMinor: number;
-	currency: string;
-	version?: number;
-	appliedOperations?: string | null;
-	moneyCommands?: string | null;
-	refundedAmountMinor?: number;
-}
 interface PersistedStatusChange {
 	from: string;
 	to: CanonicalStatus | string;
 	provider: string;
 }
-function webhookOrderWhere(providerId: string, providerOrderId: string): Where[] {
-	return [
-		{ field: "provider", value: providerId },
-		{ field: "providerOrderId", value: providerOrderId },
-	];
+function parseEvents(
+	provider: BnplProvider,
+	payload: Record<string, unknown>,
+): { event: BnplWebhookEvent | null | undefined; events: BnplWebhookEvent[] | undefined } {
+	const events = provider.toCanonicalEvents?.(payload);
+	return { event: events ? events[0] : provider.toCanonicalEvent(payload), events };
 }
 export const webhooks = (webhookOptions: WebhooksSubpluginOptions = {}) => {
 	return (providers: Record<string, BnplProvider>, options: BnplOptions) => {
@@ -208,10 +183,7 @@ export const webhooks = (webhookOptions: WebhooksSubpluginOptions = {}) => {
 							code: "WEBHOOK_INVALID_SIGNATURE",
 						});
 					}
-					const canonicalEvents = provider.toCanonicalEvents?.(verification.payload);
-					const event = canonicalEvents
-						? canonicalEvents[0]
-						: provider.toCanonicalEvent(verification.payload);
+					const { event, events: canonicalEvents } = parseEvents(provider, verification.payload);
 					if (!event) {
 						ctx.context.logger.warn(`bnpl: ${providerId} webhook unrecognised shape`);
 						throw new APIError("BAD_REQUEST", {
@@ -231,8 +203,10 @@ export const webhooks = (webhookOptions: WebhooksSubpluginOptions = {}) => {
 								readCancellationHistory(
 									provider,
 									currentEvent,
+									cancelIdOf(incomingEvent),
 									{
 										provider: provider.id,
+										providerOrderId: remote.providerOrderId,
 										status: remote.status,
 										amountMinor: parseAmount(remote.totalAmount),
 										currency: remote.totalAmount.currency,
@@ -241,16 +215,7 @@ export const webhooks = (webhookOptions: WebhooksSubpluginOptions = {}) => {
 									},
 									remote,
 								);
-							const autoAuthoriseResult = await resolveAutoAuthorise(
-								provider,
-								ctx,
-								currentEvent,
-								options,
-								{ alreadyProcessed: false },
-							);
-							throwIfAutoAuthoriseFailed(autoAuthoriseResult);
-							await runCaptureOnAuthorized(provider, ctx, currentEvent, options);
-							await runHandlers(provider, currentEvent, verification.payload, autoAuthoriseResult, {
+							await completeEvent(provider, ctx, currentEvent, verification.payload, options, {
 								statusChange: null,
 								webhookOptions,
 								dispatchTyped: true,
@@ -393,8 +358,7 @@ function buildRedeliverWebhookEventEndpoint(
 					code: "WEBHOOK_EVENT_NOT_REPLAYABLE",
 				});
 			}
-			const events = provider.toCanonicalEvents?.(parsed);
-			const event = events ? events[0] : provider.toCanonicalEvent(parsed);
+			const { event, events } = parseEvents(provider, parsed);
 			if (!event)
 				throw new APIError("BAD_REQUEST", {
 					message: BNPL_ERROR_CODES.WEBHOOK_EVENT_NOT_REPLAYABLE.message,
@@ -443,26 +407,22 @@ function ackReceived(
 	);
 	return ctx.json({ received: true, kind: event.kind });
 }
+function cancelIdOf(event: BnplWebhookEvent): string | undefined {
+	return event.kind === "canceled" ? event.cancelId : undefined;
+}
 function readCancellationHistory(
 	provider: BnplProvider,
 	event: BnplWebhookEvent,
-	existing: StoredOrder,
+	cancelId: string | undefined,
+	existing: OrderRecord,
 	remote: BnplOrderState,
 ) {
 	const orderId = "orderId" in event ? event.orderId : undefined;
-	if (
-		remote.providerOrderId !== orderId ||
-		remote.capturedAmountMinor < existing.capturedAmountMinor ||
-		remote.refundedAmountMinor < existing.refundedAmountMinor ||
-		(remote.canceledAmountMinor ?? 0) < (existing.canceledAmountMinor ?? 0)
-	)
+	if (!orderId || remote.providerOrderId !== orderId || snapshotIsBehind(existing, remote))
 		throw new Error("bnpl: cancellation notification snapshot is stale or mismatched");
 	const history = readRemoteHistory(provider, { ...existing, providerOrderId: orderId }, remote);
-	const raw = isRecord(event.raw) ? event.raw : null;
-	const data = raw && isRecord(raw.data) ? raw.data : null;
-	const cancelId = data?.cancel_id ?? raw?.cancel_id;
 	if (
-		typeof cancelId === "string" &&
+		cancelId !== undefined &&
 		!remote.operations?.some(
 			(operation) => operation.kind === "canceled" && operation.id === cancelId,
 		)
@@ -492,7 +452,8 @@ async function normalizeCancellationEvent(
 	ctx: GenericEndpointContext,
 	event: BnplWebhookEvent,
 ) {
-	if (provider.id !== "tamara" || event.kind !== "canceled") return { event, remote: undefined };
+	if (!provider.capabilities.partialCancel || event.kind !== "canceled")
+		return { event, remote: undefined };
 	const remote = await provider.fetchOrder(event.orderId, { logger: ctx.context.logger });
 	const status = statusFromBalances(remote.status, {
 		amountMinor: parseAmount(remote.totalAmount),
@@ -579,13 +540,19 @@ async function processDelivery(
 			if (remote && !frozen) {
 				const orderId = "orderId" in currentEvent ? currentEvent.orderId : undefined;
 				if (!orderId) throw new Error("bnpl: cancellation notification lacks order identity");
-				const existing = await ctx.context.adapter.findOne<StoredOrder>({
+				const existing = await ctx.context.adapter.findOne<OrderRecord>({
 					model: "bnplOrder",
-					where: webhookOrderWhere(provider.id, orderId),
+					where: orderWhere(provider.id, orderId),
 				});
 				if (!existing)
 					throw new OrderStoreMissingError("bnpl: cancellation order is not persisted");
-				readCancellationHistory(provider, currentEvent, existing, remote);
+				readCancellationHistory(
+					provider,
+					currentEvent,
+					cancelIdOf(incomingEvent),
+					existing,
+					remote,
+				);
 				checkpoint.contexts[index] = {
 					kind: currentEvent.kind === "updated" ? "updated" : "canceled",
 					...(currentEvent.kind === "updated" ? { status: currentEvent.status } : {}),
@@ -600,14 +567,9 @@ async function processDelivery(
 				verification.rawBody,
 				`${row.id}:${index}`,
 				claimed.orderApplied === true,
-				remote,
+				remote ? { remote, cancelId: cancelIdOf(incomingEvent) } : undefined,
 			);
-			const autoAuthoriseResult = await resolveAutoAuthorise(provider, ctx, currentEvent, options, {
-				alreadyProcessed: false,
-			});
-			throwIfAutoAuthoriseFailed(autoAuthoriseResult);
-			await runCaptureOnAuthorized(provider, ctx, currentEvent, options);
-			await runHandlers(provider, currentEvent, verification.payload, autoAuthoriseResult, {
+			await completeEvent(provider, ctx, currentEvent, verification.payload, options, {
 				statusChange: application.statusChange,
 				webhookOptions: deps.webhookOptions,
 				dispatchTyped: application.dispatchTyped,
@@ -644,46 +606,40 @@ async function processDelivery(
 	return ackReceived(ctx, provider.id, event);
 }
 
-async function resolveAutoAuthorise(
+/** Runs the automatic payment steps an event triggers, then the integrator's handlers. */
+async function completeEvent(
 	provider: BnplProvider,
 	ctx: GenericEndpointContext,
 	event: BnplWebhookEvent,
+	payload: Record<string, unknown>,
 	options: BnplOptions,
-	flags: {
-		alreadyProcessed: boolean;
-	},
-): Promise<AutoAuthoriseOutcome> {
-	if (event.kind === "approved") {
-		return runAutoAuthorise(provider, ctx, event, options, flags.alreadyProcessed);
-	}
-	if (event.kind === "authorized") return { status: "not-applicable" };
-	return { status: "disabled" };
-}
-function throwIfAutoAuthoriseFailed(result: AutoAuthoriseOutcome): void {
-	if (result.status === "failed") throw result.error;
-}
-async function runCaptureOnAuthorized(
-	provider: BnplProvider,
-	ctx: GenericEndpointContext,
-	event: BnplWebhookEvent,
-	options: BnplOptions,
+	handlers: HandlerDeps,
 ): Promise<void> {
-	if (event.kind !== "authorized" || !options.captureOnAuthorise) return;
-	await runAutoCapture(provider, ctx, event.orderId, options);
+	const autoAuthoriseResult: AutoAuthoriseOutcome =
+		event.kind === "approved"
+			? await runAutoAuthorise(provider, ctx, event, options)
+			: event.kind === "authorized"
+				? { status: "not-applicable" }
+				: { status: "disabled" };
+	if (autoAuthoriseResult.status === "failed") throw autoAuthoriseResult.error;
+	if (event.kind === "authorized" && options.captureOnAuthorise)
+		await runAutoCapture(provider, ctx, event.orderId, options);
+	await runHandlers(provider, event, payload, autoAuthoriseResult, handlers);
+}
+interface HandlerDeps {
+	statusChange: PersistedStatusChange | null;
+	webhookOptions: WebhooksSubpluginOptions;
+	dispatchTyped: boolean;
+	providerHandler?: boolean;
+	deliveryId?: string;
+	runOnce?: (name: string, handler: () => Promise<void> | void) => Promise<void>;
 }
 async function runHandlers(
 	provider: BnplProvider,
 	event: BnplWebhookEvent,
 	payload: Record<string, unknown>,
 	autoAuthoriseResult: AutoAuthoriseOutcome,
-	deps: {
-		statusChange: PersistedStatusChange | null;
-		webhookOptions: WebhooksSubpluginOptions;
-		dispatchTyped: boolean;
-		providerHandler?: boolean;
-		deliveryId?: string;
-		runOnce?: (name: string, handler: () => Promise<void> | void) => Promise<void>;
-	},
+	deps: HandlerDeps,
 ): Promise<void> {
 	const { webhookOptions } = deps;
 	const dispatchCtx: WebhookDispatchContext = {
@@ -771,33 +727,6 @@ async function dispatchTyped(
 			return;
 	}
 }
-function moneyEventKey(
-	provider: BnplProvider,
-	event: Extract<BnplWebhookEvent, { kind: "captured" | "refunded" }>,
-): string {
-	return (
-		provider.webhookDedupKey?.(event) ??
-		`${provider.id}:${event.kind}:${event.kind === "captured" ? event.captureId : event.refundId}`
-	);
-}
-function captureEventKey(
-	provider: BnplProvider,
-	orderId: string,
-	currency: string,
-	captureId: string,
-	amountMinor: number,
-): string {
-	if (!isBnplCurrency(currency)) throw new Error("bnpl: invalid persisted currency");
-	return moneyEventKey(provider, {
-		kind: "captured",
-		provider: provider.id,
-		orderId,
-		captureId,
-		amountMinor,
-		currency,
-		raw: null,
-	});
-}
 async function persistOrderUpdate(
 	ctx: GenericEndpointContext,
 	provider: BnplProvider,
@@ -805,17 +734,19 @@ async function persistOrderUpdate(
 	rawBody: string,
 	deliveryKey: string,
 	legacyApplied = false,
-	remoteCancellation?: BnplOrderState,
+	cancellation?: { remote: BnplOrderState; cancelId?: string },
 ): Promise<{ statusChange: PersistedStatusChange | null; dispatchTyped: boolean }> {
 	const orderId = "orderId" in event ? event.orderId : undefined;
 	if (!orderId) return { statusChange: null, dispatchTyped: false };
 	let statusChange: PersistedStatusChange | null = null;
 	let dispatch = true;
 	const operationKey =
-		event.kind === "captured" || event.kind === "refunded" ? moneyEventKey(provider, event) : null;
-	await mutateOrder<StoredOrder>(
+		event.kind === "captured" || event.kind === "refunded"
+			? ledgerKeyForEvent(provider, event)
+			: null;
+	await mutateOrder<OrderRecord>(
 		ctx,
-		() => webhookOrderWhere(provider.id, orderId),
+		() => orderWhere(provider.id, orderId),
 		(existing) => {
 			const operations = readAppliedOperations(existing.appliedOperations);
 			const transitions: Record<string, PersistedStatusChange> = existing.webhookTransitions
@@ -841,12 +772,13 @@ async function persistOrderUpdate(
 			let target = candidate;
 			let cancellationRepair = false;
 			let importedKeys = operations;
-			if (remoteCancellation) {
+			if (cancellation) {
 				const { history, status } = readCancellationHistory(
 					provider,
 					event,
+					cancellation.cancelId,
 					existing,
-					remoteCancellation,
+					cancellation.remote,
 				);
 				Object.assign(update, {
 					capturedAmountMinor: history.captured,
@@ -888,7 +820,7 @@ async function persistOrderUpdate(
 
 function computeEventTarget(
 	event: BnplWebhookEvent,
-	existing: StoredOrder,
+	existing: OrderRecord,
 	now: Date,
 	update: OrderUpdate,
 	logger: {
@@ -909,33 +841,20 @@ function computeEventTarget(
 		case "canceled":
 			update.canceledAt = now;
 			return "canceled";
-		case "captured": {
-			const cumulative = skipMoneyDelta
-				? existing.capturedAmountMinor
-				: applyCaptureDelta(event, existing, update, now, logger);
-			if (cumulative === null) return existing.status;
-			return existing.refundedAmountMinor > 0
-				? deriveRefundedStatus({
-						totalAmountMinor: cumulative,
-						cumulativeMinor: existing.refundedAmountMinor,
-					})
-				: deriveCapturedStatus({
-						totalAmountMinor: existing.amountMinor - (existing.canceledAmountMinor ?? 0),
-						cumulativeMinor: cumulative,
-					});
-		}
+		case "captured":
 		case "refunded": {
-			const cumulative = skipMoneyDelta
-				? existing.refundedAmountMinor
-				: applyRefundDelta(event, existing, update, logger);
-			if (cumulative === null) return existing.status;
-			return deriveRefundedStatus({
-				totalAmountMinor:
-					existing.capturedAmountMinor > 0
-						? existing.capturedAmountMinor
-						: existing.amountMinor - (existing.canceledAmountMinor ?? 0),
-				cumulativeMinor: cumulative,
-			});
+			if (skipMoneyDelta) return existing.status;
+			if (event.currency !== existing.currency || event.amountMinor <= 0) {
+				logger.warn(
+					`bnpl: ${event.kind} event carries no applicable ${existing.currency} amount — skipping delta`,
+				);
+				return existing.status;
+			}
+			const moved = addObservedMoney(existing, event.kind, event.amountMinor);
+			update.capturedAmountMinor = moved.capturedAmountMinor;
+			update.refundedAmountMinor = moved.refundedAmountMinor;
+			if (event.kind === "captured") update.capturedAt = now;
+			return moved.status;
 		}
 		case "updated":
 			if (event.totalAmount) {
@@ -954,46 +873,6 @@ function computeEventTarget(
 			return existing.status;
 	}
 }
-function applyCaptureDelta(
-	event: BnplWebhookEvent,
-	existing: StoredOrder,
-	update: OrderUpdate,
-	now: Date,
-	logger: {
-		warn: (msg: string) => void;
-	},
-): number | null {
-	const delta = pickCaptureDelta(event, existing, logger);
-	if (delta === null) return null;
-	const cumulative = existing.capturedAmountMinor + delta;
-	if (
-		!Number.isSafeInteger(cumulative) ||
-		cumulative > existing.amountMinor - (existing.canceledAmountMinor ?? 0)
-	)
-		throw new Error("bnpl: capture exceeds order amount");
-	update.capturedAmountMinor = cumulative;
-	update.capturedAt = now;
-	return cumulative;
-}
-function applyRefundDelta(
-	event: BnplWebhookEvent,
-	existing: StoredOrder,
-	update: OrderUpdate,
-	logger: {
-		warn: (msg: string) => void;
-	},
-): number | null {
-	const delta = pickRefundDelta(event, existing, logger);
-	if (delta === null) return null;
-	const cumulative = existing.refundedAmountMinor + delta;
-	if (
-		!Number.isSafeInteger(cumulative) ||
-		cumulative > existing.amountMinor - (existing.canceledAmountMinor ?? 0)
-	)
-		throw new Error("bnpl: refund exceeds order amount");
-	update.refundedAmountMinor = cumulative;
-	return cumulative;
-}
 function applyRegressionGuard(
 	currentStatus: string,
 	candidate: CanonicalStatus | string,
@@ -1008,239 +887,115 @@ function applyRegressionGuard(
 	);
 	return currentStatus;
 }
-function positiveOrNull(amountMinor: number | null): number | null {
-	return amountMinor !== null && amountMinor > 0 ? amountMinor : null;
-}
-function pickCaptureDelta(
-	event: BnplWebhookEvent,
-	existing: StoredOrder,
-	logger: {
-		warn: (msg: string) => void;
-	},
-): number | null {
-	if (event.kind !== "captured") return null;
-	if (event.currency !== existing.currency) {
-		logger.warn(
-			`bnpl: captured event currency ${event.currency} differs from order currency ${existing.currency} — skipping delta`,
-		);
-		return null;
-	}
-	if (event.amountMinor > 0) {
-		if (!Number.isSafeInteger(event.amountMinor))
-			throw new Error("bnpl: operation amount must be a safe integer");
-		return event.amountMinor;
-	}
-	const data = isRecord(event.raw) ? event.raw.data : undefined;
-	return positiveOrNull(extractMinorAmount(data, "captured_amount", existing.currency, logger));
-}
-function pickRefundDelta(
-	event: BnplWebhookEvent,
-	existing: StoredOrder,
-	logger: {
-		warn: (msg: string) => void;
-	},
-): number | null {
-	if (event.kind !== "refunded") return null;
-	if (event.currency !== existing.currency) {
-		logger.warn(
-			`bnpl: refunded event currency ${event.currency} differs from order currency ${existing.currency} — skipping delta`,
-		);
-		return null;
-	}
-	if (event.amountMinor > 0) {
-		if (!Number.isSafeInteger(event.amountMinor))
-			throw new Error("bnpl: operation amount must be a safe integer");
-		return event.amountMinor;
-	}
-	const data = isRecord(event.raw) ? event.raw.data : undefined;
-	return positiveOrNull(extractMinorAmount(data, "refunded_amount", existing.currency, logger));
+interface AutoAuthoriseRun {
+	outcome: AutoAuthoriseOutcome;
+	capture: boolean;
 }
 async function runAutoAuthorise(
 	provider: BnplProvider,
 	ctx: GenericEndpointContext,
-	event: BnplWebhookEvent,
+	event: Extract<BnplWebhookEvent, { kind: "approved" }>,
 	options: BnplOptions,
-	alreadyProcessed: boolean,
 ): Promise<AutoAuthoriseOutcome> {
-	if (event.kind !== "approved") return { status: "not-applicable" };
 	const authorize = provider.authorize?.bind(provider);
-	if (!provider.capabilities.separateAuthorise || !authorize) {
-		return { status: "not-applicable" };
-	}
+	if (!provider.capabilities.separateAuthorise || !authorize) return { status: "not-applicable" };
 	if (options.autoAuthorise === false) return { status: "disabled" };
-	if (alreadyProcessed) return { status: "already-authorised" };
 	if (!options.persistOrders)
 		return {
 			status: "failed",
 			error: new Error("bnpl: durable auto-authorisation requires persistOrders"),
 		};
 	const orderId = event.orderId;
-	let stored: AutoAuthoriseStoredOrder | null = null;
-	if (options.persistOrders) {
-		stored = await ctx.context.adapter.findOne<AutoAuthoriseStoredOrder>({
-			model: "bnplOrder",
-			where: webhookOrderWhere(provider.id, orderId),
-		});
-		if (stored && !isAuthorisedState(stored.status) && !canTransition(stored.status, "authorised"))
-			return { status: "not-applicable" };
-	}
-	let command: MoneyCommandReservation | undefined;
-	let recoveryRequested = false;
-	try {
-		const reservation = await reserveMoneyCommand<AutoAuthoriseStoredOrder>(
-			ctx,
-			() => webhookOrderWhere(provider.id, orderId),
-			"authorise",
-			orderId,
-			{},
-			undefined,
-			true,
-		);
-		if (reservation.kind === "completed") {
-			if (options.captureOnAuthorise) await runAutoCapture(provider, ctx, orderId, options);
-			return { status: "already-authorised" };
-		}
-		command = reservation.command;
-		const reservedCommand = reservation.command;
-		const local = await recoverLocalAuthoriseCommand<AutoAuthoriseStoredOrder>(
-			ctx,
-			() => webhookOrderWhere(provider.id, orderId),
-			reservedCommand,
-			orderId,
-		);
-		if (local) {
-			if (options.captureOnAuthorise) await runAutoCapture(provider, ctx, orderId, options);
-			return { status: "already-authorised" };
-		}
-		recoveryRequested = reservation.kind === "pending";
-		if (recoveryRequested)
-			throw new Error("bnpl: authorisation outcome is uncertain; verifying remote state");
-		const result = await sendReservedCommand(
-			ctx,
-			() => webhookOrderWhere(provider.id, orderId),
-			reservedCommand,
-			() => authorize(orderId, { logger: ctx.context.logger }),
-			reportsAuthorisedState,
-		);
-		if (result.providerOrderId !== orderId)
-			throw new Error("bnpl: authorisation order identity mismatch");
-		let capturedAmountMinor: number | undefined;
-		let storedCurrency: string | undefined;
-		if (options.persistOrders) {
-			const mutation = await mutateOrder<AutoAuthoriseStoredOrder>(
-				ctx,
-				() => webhookOrderWhere(provider.id, orderId),
-				(row) => {
-					const updateResult = buildAuthoriseOrderUpdate(result, {
-						currency: row.currency,
-						amountMinor: row.amountMinor,
-						canceledAmountMinor: row.canceledAmountMinor,
-						status: row.status,
-						capturedAmountMinor: row.capturedAmountMinor ?? 0,
-					});
-					capturedAmountMinor = updateResult.capturedAmountMinor;
-					if (
-						capturedAmountMinor !== undefined &&
-						(!Number.isSafeInteger(capturedAmountMinor) ||
-							capturedAmountMinor < 0 ||
-							capturedAmountMinor > row.amountMinor - (row.canceledAmountMinor ?? 0))
-					)
-						throw new Error("bnpl: invalid authorised capture amount");
-					const operations = readAppliedOperations(row.appliedOperations);
-					if (result.captureId && capturedAmountMinor !== undefined)
-						operations.push(
-							captureEventKey(
-								provider,
-								orderId,
-								row.currency,
-								result.captureId,
-								capturedAmountMinor,
-							),
-						);
-					return {
-						...updateResult.update,
-						appliedOperations: JSON.stringify([...new Set(operations)]),
-						moneyCommands: completeMoneyCommand(
-							row.moneyCommands,
-							reservedCommand,
-							result as unknown as Record<string, unknown>,
-						),
-					};
-				},
-			);
-			storedCurrency = mutation.previous.currency;
-		}
-		if (result.captureId && capturedAmountMinor !== undefined && storedCurrency) {
-			await recordSyntheticCaptureEvent(ctx, provider, orderId, storedCurrency, {
-				captureId: result.captureId,
-				amountMinor: capturedAmountMinor,
-				raw: result.raw,
-			});
-		}
-		if (options.captureOnAuthorise && !result.autoCaptured && result.status !== "fully_captured") {
-			await runAutoCapture(provider, ctx, orderId, options);
-		}
-		return { status: "authorised", raw: result.raw };
-	} catch (e) {
-		if (recoveryRequested || reportsAuthorisedState(e)) {
-			const recoveryCommand = command;
-			if (!recoveryCommand)
-				return { status: "failed", error: e instanceof Error ? e : new Error(String(e)) };
-			const remote = await provider.fetchOrder(orderId, { logger: ctx.context.logger });
-			if (!isAuthorisedState(remote.status))
-				return { status: "failed", error: e instanceof Error ? e : new Error(String(e)) };
-			if (options.persistOrders)
-				await mutateOrder<AutoAuthoriseStoredOrder>(
-					ctx,
-					() => webhookOrderWhere(provider.id, orderId),
-					(current) => {
-						const {
-							keys: operations,
-							captured,
-							refunded,
-							canceled,
-						} = readRemoteHistory(provider, current, remote);
-						const candidate = statusFromBalances(remote.status, {
-							amountMinor: current.amountMinor,
-							captured,
-							refunded,
-							canceled,
-						});
-						return {
-							...buildAuthoriseOrderUpdate(
-								{
-									providerOrderId: orderId,
-									status: remote.status,
-									capturedAmountMinor: remote.capturedAmountMinor,
-									raw: remote.raw,
-								},
-								{
-									amountMinor: current.amountMinor,
-									canceledAmountMinor: current.canceledAmountMinor,
-									capturedAmountMinor: current.capturedAmountMinor,
-									status: current.status,
-								},
-							).update,
-							appliedOperations: JSON.stringify([...new Set(operations)]),
-							status: canTransition(current.status, candidate) ? candidate : current.status,
-							refundedAmountMinor: refunded,
-							canceledAmountMinor: canceled,
-							moneyCommands: completeMoneyCommand(current.moneyCommands, recoveryCommand, {
-								orderId,
-								status: remote.status,
-								already: true,
-							}),
-						};
-					},
-				);
-			if (options.captureOnAuthorise) await runAutoCapture(provider, ctx, orderId, options);
-			return { status: "already-authorised" };
-		}
+	const where = () => orderWhere(provider.id, orderId);
+	const failed = (e: unknown): AutoAuthoriseRun => {
 		ctx.context.logger.error(
 			`bnpl: ${provider.id} auto-authorise failed for ${orderId}: ${e instanceof Error ? e.message : e}`,
 		);
-		return { status: "failed", error: e instanceof Error ? e : new Error(String(e)) };
+		return {
+			outcome: { status: "failed", error: e instanceof Error ? e : new Error(String(e)) },
+			capture: false,
+		};
+	};
+	const already: AutoAuthoriseRun = { outcome: { status: "already-authorised" }, capture: true };
+	let run: AutoAuthoriseRun;
+	try {
+		const stored = await ctx.context.adapter.findOne<OrderRecord>({
+			model: "bnplOrder",
+			where: where(),
+		});
+		if (stored && !isAuthorisedState(stored.status) && !canTransition(stored.status, "authorised"))
+			return { status: "not-applicable" };
+		run = await runMoneyCommand<AutoAuthoriseRun>(
+			ctx,
+			{
+				where,
+				operation: "authorise",
+				reference: orderId,
+				input: {},
+				onPending: "verify",
+				replay: () => already,
+			},
+			async (command) => {
+				const recoveryRequested = command.state === "pending";
+				try {
+					const local = await command.settleIf((order) =>
+						isAuthorisedState(order.status)
+							? { response: { orderId, status: order.status, already: true } }
+							: null,
+					);
+					if (local) return already;
+					if (recoveryRequested)
+						throw new Error("bnpl: authorisation outcome is uncertain; verifying remote state");
+					const result = await command.send(
+						() => authorize(orderId, { logger: ctx.context.logger }),
+						reportsAuthorisedState,
+					);
+					if (result.providerOrderId !== orderId)
+						throw new Error("bnpl: authorisation order identity mismatch");
+					let capturedAmountMinor: number | undefined;
+					let currency: string | undefined;
+					await command.settle((order) => {
+						const applied = applyAuthorisation(order, provider, result);
+						capturedAmountMinor = applied.capturedAmountMinor;
+						currency = order.currency;
+						return { response: result, patch: applied.patch };
+					});
+					if (result.captureId && capturedAmountMinor !== undefined && currency)
+						await recordSyntheticCaptureEvent(ctx, provider, orderId, currency, {
+							captureId: result.captureId,
+							amountMinor: capturedAmountMinor,
+							raw: result.raw,
+						});
+					return {
+						outcome: { status: "authorised", raw: result.raw },
+						capture: !result.autoCaptured && result.status !== "fully_captured",
+					};
+				} catch (e) {
+					if (!recoveryRequested && !reportsAuthorisedState(e)) return failed(e);
+					const remote = await provider.fetchOrder(orderId, { logger: ctx.context.logger });
+					if (!isAuthorisedState(remote.status))
+						return {
+							outcome: { status: "failed", error: e instanceof Error ? e : new Error(String(e)) },
+							capture: false,
+						};
+					await command.settle((order) => ({
+						response: { orderId, status: remote.status, already: true },
+						patch: {
+							...importSnapshot(order, provider, remote),
+							authorisedAt: new Date(),
+							rawData: JSON.stringify(remote.raw),
+						},
+					}));
+					return already;
+				}
+			},
+		);
+	} catch (e) {
+		run = failed(e);
 	}
+	if (run.capture && options.captureOnAuthorise)
+		await runAutoCapture(provider, ctx, orderId, options);
+	return run.outcome;
 }
 async function runAutoCapture(
 	provider: BnplProvider,
@@ -1254,129 +1009,82 @@ async function runAutoCapture(
 		);
 		return;
 	}
+	const where = () => orderWhere(provider.id, orderId);
 	try {
-		type CaptureOrder = StoredOrder & { moneyCommands?: string | null };
-		const row = await ctx.context.adapter.findOne<CaptureOrder>({
-			model: "bnplOrder",
-			where: webhookOrderWhere(provider.id, orderId),
-		});
+		const load = () =>
+			ctx.context.adapter.findOne<OrderRecord>({ model: "bnplOrder", where: where() });
+		let row = await load();
+		if (row && (await settleLostAutomaticCaptures(ctx, provider, row, where))) row = await load();
 		if (!row) throw new OrderStoreMissingError("bnpl: auto-capture order is not persisted");
-		if (["canceled", "expired", "declined", "closed", "fully_refunded"].includes(row.status))
-			return;
-		if (
-			row.status === "fully_captured" ||
-			(row.capturedAmountMinor ?? 0) >= row.amountMinor - (row.canceledAmountMinor ?? 0)
-		) {
+		if (isTerminalStatus(row.status)) return;
+		const remainingMinor = capturableMinor(row);
+		if (row.status === "fully_captured" || remainingMinor <= 0) {
 			ctx.context.logger.info(
 				`bnpl: ${provider.id} captureOnAuthorise skipped for ${orderId} — already captured`,
 			);
 			return;
 		}
-		const remainingMinor =
-			row.amountMinor - (row.canceledAmountMinor ?? 0) - (row.capturedAmountMinor ?? 0);
 		const total = formatAmount(remainingMinor, row.currency);
 		const shippingInfo = await options.captureOnAuthoriseShippingInfo?.({
 			providerId: provider.id,
 			orderId,
 			totalAmount: total,
 		});
-		if (!shippingInfo && provider.id === "tamara")
-			throw new Error("bnpl: Tamara auto-capture requires shipping information");
-		const reference = operationReference(
-			{
-				provider: provider.id,
-				providerOrderId: orderId,
-				capturedAmountMinor: row.capturedAmountMinor,
-			},
-			"capture",
-			remainingMinor,
-		);
-		const reservation = await reserveMoneyCommand<CaptureOrder>(
+		if (!shippingInfo && provider.capabilities.captureRequiresShipping)
+			throw new Error(`bnpl: ${provider.id} auto-capture requires shipping information`);
+		const reference = automaticCaptureReference(row, remainingMinor);
+		const captureResult = await runMoneyCommand<BnplCaptureResult>(
 			ctx,
-			() => webhookOrderWhere(provider.id, orderId),
-			"capture",
-			reference,
-			{ amountMinor: remainingMinor, currency: row.currency },
-			(current) => {
-				if (
-					["canceled", "expired", "declined", "closed", "fully_refunded"].includes(
-						current.status,
-					) ||
-					current.currency !== row.currency ||
-					remainingMinor >
-						current.amountMinor - (current.canceledAmountMinor ?? 0) - current.capturedAmountMinor
-				)
-					throw new Error("bnpl: auto-capture amount exceeds latest remaining balance");
+			{
+				where,
+				operation: "capture",
+				reference,
+				input: { amountMinor: remainingMinor, currency: row.currency },
+				onPending: "verify",
+				recordBaseline: true,
+				check: (order) => {
+					if (
+						isTerminalStatus(order.status) ||
+						order.currency !== row.currency ||
+						remainingMinor > capturableMinor(order)
+					)
+						throw new Error("bnpl: auto-capture amount exceeds latest remaining balance");
+				},
+				replay: (saved) => saved as unknown as BnplCaptureResult,
 			},
-		);
-		let captureResult: Awaited<ReturnType<BnplProvider["capture"]>>;
-		if (reservation.kind === "completed")
-			captureResult = reservation.result as unknown as typeof captureResult;
-		else {
-			captureResult = await sendReservedCommand(
-				ctx,
-				() => webhookOrderWhere(provider.id, orderId),
-				reservation.command,
-				() =>
+			async (command) => {
+				if (command.state === "pending")
+					return settlePendingMoneyOperation(
+						ctx,
+						command,
+						provider,
+						row,
+						"captured",
+						remainingMinor,
+					);
+				const result = await command.send(() =>
 					provider.capture(
 						orderId,
 						{ totalAmount: total, shippingInfo, merchantReferenceId: reference },
 						{ logger: ctx.context.logger },
 					),
-			);
-		}
-		if (
-			captureResult.providerOrderId !== orderId ||
-			!captureResult.captureId ||
-			!Number.isSafeInteger(captureResult.amountMinor) ||
-			captureResult.amountMinor !== remainingMinor
-		)
-			throw new Error("bnpl: invalid auto-capture result returned by provider");
-		const key = captureEventKey(
-			provider,
-			orderId,
-			row.currency,
-			captureResult.captureId,
-			captureResult.amountMinor,
-		);
-		await mutateOrder<CaptureOrder>(
-			ctx,
-			() => webhookOrderWhere(provider.id, orderId),
-			(current) => {
-				const moneyCommands =
-					reservation.kind === "completed"
-						? current.moneyCommands
-						: completeMoneyCommand(
-								current.moneyCommands,
-								reservation.command,
-								captureResult as unknown as Record<string, unknown>,
-							);
-				const operations = readAppliedOperations(current.appliedOperations);
-				if (operations.includes(key)) return { moneyCommands, updatedAt: new Date() };
-				const capturedAmountMinor = current.capturedAmountMinor + captureResult.amountMinor;
+				);
 				if (
-					!Number.isSafeInteger(capturedAmountMinor) ||
-					capturedAmountMinor + (current.canceledAmountMinor ?? 0) > current.amountMinor
+					result.providerOrderId !== orderId ||
+					!result.captureId ||
+					!Number.isSafeInteger(result.amountMinor) ||
+					result.amountMinor !== remainingMinor
 				)
-					throw new Error("bnpl: auto-capture exceeds latest order balance");
-				const candidate =
-					current.refundedAmountMinor > 0
-						? deriveRefundedStatus({
-								totalAmountMinor: capturedAmountMinor,
-								cumulativeMinor: current.refundedAmountMinor,
-							})
-						: deriveCapturedStatus({
-								totalAmountMinor: current.amountMinor - (current.canceledAmountMinor ?? 0),
-								cumulativeMinor: capturedAmountMinor,
-							});
-				return {
-					status: canTransition(current.status, candidate) ? candidate : current.status,
-					capturedAt: new Date(),
-					capturedAmountMinor,
-					appliedOperations: JSON.stringify([...operations, key]),
-					moneyCommands,
-					updatedAt: new Date(),
-				};
+					throw new Error("bnpl: invalid auto-capture result returned by provider");
+				return await command.settle((order) => ({
+					response: result,
+					patch:
+						applyMoneyOperation(order, provider, {
+							kind: "captured",
+							id: result.captureId,
+							amountMinor: result.amountMinor,
+						}) ?? undefined,
+				}));
 			},
 		);
 		await recordSyntheticCaptureEvent(ctx, provider, orderId, row.currency, captureResult);

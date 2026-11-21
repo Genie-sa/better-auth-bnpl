@@ -121,6 +121,8 @@ export interface BnplRefundResult {
 	refundId: string;
 	providerOrderId: string;
 	amountMinor: number;
+	/** Every native refund this request created, when the provider splits one refund across captures. */
+	operations?: BnplMoneyOperation[];
 	raw: unknown;
 }
 export interface BnplCancelArgs {
@@ -152,6 +154,8 @@ export interface BnplMoneyOperation {
 	kind: "captured" | "refunded" | "canceled";
 	amountMinor: number;
 	currency: BnplCurrency;
+	/** The merchant reference the provider recorded with this operation, when it reports one. */
+	reference?: string;
 }
 export interface BnplAuthorizeResult {
 	providerOrderId: string;
@@ -171,6 +175,8 @@ export interface BnplOrderState {
 	refundedAmountMinor: number;
 	canceledAmountMinor?: number;
 	operations?: BnplMoneyOperation[];
+	/** The provider reports the payment as closed: no further captures will be accepted. */
+	closed?: boolean;
 	raw: unknown;
 }
 export interface BnplPersistedOrder {
@@ -258,6 +264,8 @@ export type BnplWebhookEvent =
 			kind: "canceled";
 			provider: string;
 			orderId: string;
+			/** Native identity of the cancellation, when the provider reports one. */
+			cancelId?: string;
 			raw: unknown;
 	  }
 	| {

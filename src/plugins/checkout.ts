@@ -1,7 +1,12 @@
 import type { GenericEndpointContext, User } from "better-auth";
 import { APIError, createAuthEndpoint, getSessionFromCtx } from "better-auth/api";
 import { z } from "zod";
-import { BNPL_ERROR_CODES, BnplProviderError, isDefinitiveRejection } from "../core/errors";
+import {
+	BNPL_ERROR_CODES,
+	BnplPluginError,
+	BnplProviderError,
+	isDefinitiveRejection,
+} from "../core/errors";
 import { parseAmount } from "../core/money";
 import type { BnplProvider } from "../core/provider";
 import type {
@@ -430,6 +435,9 @@ async function createProviderCheckout(
 					`bnpl: failed to discard rejected checkout reservation: ${discardError instanceof Error ? discardError.message : discardError}`,
 				);
 			}
+		}
+		if (e instanceof BnplPluginError) {
+			throw new APIError("BAD_REQUEST", { message: e.message, code: e.code });
 		}
 		if (e instanceof BnplProviderError) {
 			throw new APIError("BAD_GATEWAY", {

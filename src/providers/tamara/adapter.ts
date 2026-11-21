@@ -221,7 +221,14 @@ export function tamaraToCanonicalEvent(payload: Record<string, unknown>): BnplWe
 			case "updated":
 				return { kind: "updated", provider: PROVIDER_ID, orderId: msg.order_id, raw: payload };
 			case "canceled":
-				return { kind: "canceled", provider: PROVIDER_ID, orderId: msg.order_id, raw: payload };
+				return {
+					kind: "canceled",
+					provider: PROVIDER_ID,
+					orderId: msg.order_id,
+					cancelId:
+						readStringField(payload.data, "cancel_id") ?? readStringField(payload, "cancel_id"),
+					raw: payload,
+				};
 			case "expired":
 				return { kind: "expired", provider: PROVIDER_ID, orderId: msg.order_id, raw: payload };
 			case "approved":

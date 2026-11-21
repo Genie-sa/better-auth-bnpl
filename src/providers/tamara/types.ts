@@ -14,6 +14,7 @@ import type {
 	tamaraRegisterWebhookRequestSchema,
 	tamaraRiskAssessmentSchema,
 	tamaraSimplifiedRefundBodySchema,
+	tamaraSimplifiedRefundResponseSchema,
 	tamaraUpdateReferenceIdRequestSchema,
 	tamaraUpdateWebhookRequestSchema,
 	tamaraVoidQuerySchema,
@@ -44,13 +45,7 @@ export interface TamaraCaptureResponse {
 	captured_amount: TamaraMoney;
 	[k: string]: unknown;
 }
-export interface TamaraSimplifiedRefundResponse {
-	refund_id: string;
-	order_id: string;
-	status: "fully_refunded" | "partially_refunded";
-	refunded_amount: TamaraMoney;
-	[k: string]: unknown;
-}
+export type TamaraSimplifiedRefundResponse = z.output<typeof tamaraSimplifiedRefundResponseSchema>;
 export interface TamaraCancelResponse {
 	order_id: string;
 	cancel_id: string;

@@ -32,6 +32,23 @@ export const TERMINAL_STATUSES: ReadonlySet<CanonicalStatus> = new Set([
 	"fully_refunded",
 	"closed",
 ]);
+/** True once an order can accept no further captures. */
+export function isTerminalStatus(status: string): boolean {
+	return isCanonicalStatus(status) && TERMINAL_STATUSES.has(status);
+}
+const AUTHORISED_STATES: ReadonlySet<string> = new Set([
+	"authorised",
+	"updated",
+	"partially_captured",
+	"fully_captured",
+	"partially_refunded",
+	"fully_refunded",
+	"closed",
+]);
+/** True once the buyer's payment has been authorised, whatever has happened to it since. */
+export function isAuthorisedState(status: string): boolean {
+	return AUTHORISED_STATES.has(status);
+}
 export interface PartialFullDerivationContext {
 	totalAmountMinor: number | null;
 	cumulativeMinor?: number | null;

@@ -42,6 +42,14 @@ export interface ProviderCapabilities {
 	partialRefund: boolean;
 	multipleCaptures: boolean;
 	disputes: boolean;
+	/** Capture requests are refused without shipping details, so automatic capture must supply them. */
+	captureRequiresShipping?: boolean;
+	/** Cancellations may cover part of the order, so a canceled notification needs snapshot verification. */
+	partialCancel?: boolean;
+	/** Cancelling closes the payment natively, so cancellation is verified as closure. */
+	cancelClosesPayment?: boolean;
+	/** Native operations carry the merchant reference they were created with (`BnplMoneyOperation.reference`). */
+	operationReferences?: boolean;
 }
 export interface ProviderDisplay {
 	displayName: string;

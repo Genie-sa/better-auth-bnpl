@@ -25,3 +25,31 @@ export function isOneOf<const T extends readonly string[]>(
 	}
 	return false;
 }
+
+/**
+ * Marks an instance with a registered symbol so `instanceof` also recognises instances created by
+ * another bundled copy of this package, such as the separate provider entry points or a CJS copy.
+ */
+export function brandInstance(instance: object, brand: symbol): void {
+	Object.defineProperty(instance, brand, { value: true });
+}
+export function hasBrand(value: unknown, brand: symbol): boolean {
+	return typeof value === "object" && value !== null && Reflect.get(value, brand) === true;
+}
+
+/**
+ * Makes `instanceof base` recognise instances branded by any bundled copy of the package, while
+ * subclasses keep ordinary prototype checks.
+ */
+export function recogniseBrand(
+	base: abstract new (...args: never[]) => unknown,
+	brand: symbol,
+): void {
+	Object.defineProperty(base, Symbol.hasInstance, {
+		value(this: unknown, value: unknown): boolean {
+			return this === base
+				? hasBrand(value, brand)
+				: Function.prototype[Symbol.hasInstance].call(this, value);
+		},
+	});
+}

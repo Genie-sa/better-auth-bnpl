@@ -1,15 +1,19 @@
-import type { GenericEndpointContext } from "better-auth";
 import { describe, expect, it, vi } from "vitest";
 import { BnplProviderError } from "../core/errors";
+import type { BnplProvider } from "../core/provider";
 import type { BnplCaptureResult, BnplWebhookEvent } from "../core/types";
 import { bnpl } from "../plugin";
-import { releaseRejectedMoneyCommand, reserveMoneyCommand } from "../plugins/money-command";
 import { webhooks } from "../plugins/webhooks";
 import { makeBnplTestInstance, stubProvider } from "./_harness";
 
 const orderId = "uncertain-auto-capture";
-async function setup(capture: () => Promise<BnplCaptureResult>, shipping?: () => void) {
+async function setup(
+	capture: () => Promise<BnplCaptureResult>,
+	shipping?: () => void,
+	overrides: Partial<BnplProvider<"tamara">> = {},
+) {
 	const provider = stubProvider("tamara", {
+		...overrides,
 		capture,
 		verifyWebhook: async (request) => ({
 			ok: true,
@@ -68,20 +72,25 @@ function result(overrides: Partial<BnplCaptureResult> = {}): BnplCaptureResult {
 	};
 }
 describe("durable automatic capture intent", () => {
-	it("does not release a newer command when an old rejected owner's cleanup arrives late", async () => {
-		const { instance, row } = await setup(async () => result());
-		const ctx = { context: await instance.auth.$context } as GenericEndpointContext;
-		const where = () => [{ field: "id", value: row.id }];
-		const first = await reserveMoneyCommand(ctx, where, "capture", "same-reference", {});
-		if (first.kind !== "reserved") throw new Error("missing first reservation");
-		await releaseRejectedMoneyCommand(ctx, where, first.command);
-		const second = await reserveMoneyCommand(ctx, where, "capture", "same-reference", {});
-		if (second.kind !== "reserved") throw new Error("missing second reservation");
-		await releaseRejectedMoneyCommand(ctx, where, first.command);
-		await expect(
-			reserveMoneyCommand(ctx, where, "capture", "same-reference", {}),
-		).rejects.toMatchObject({ status: "CONFLICT" });
-		expect(first.command.token).not.toBe(second.command.token);
+	it("frees a provider-refused capture so the next delivery can retry it", async () => {
+		const capture = vi
+			.fn<() => Promise<BnplCaptureResult>>()
+			.mockRejectedValueOnce(
+				new BnplProviderError("tamara", "refused", { status: 422, rejected: true }),
+			)
+			.mockResolvedValueOnce(result());
+		const { post, instance } = await setup(capture);
+		expect((await post("refused-trigger")).error).toMatchObject({ status: 500 });
+		expect((await post("retry-trigger")).error).toBeNull();
+		const order = instance.db.bnplOrder?.[0] as {
+			capturedAmountMinor: number;
+			moneyCommands: string;
+		};
+		expect(capture).toHaveBeenCalledTimes(2);
+		expect(order.capturedAmountMinor).toBe(10000);
+		expect(JSON.parse(order.moneyCommands)).toEqual([
+			expect.objectContaining({ state: "completed" }),
+		]);
 	});
 	it("completes its journal without counting money twice when the native webhook beats its response", async () => {
 		let release!: () => void;
@@ -178,6 +187,44 @@ describe("durable automatic capture intent", () => {
 		expect(capture).toHaveBeenCalledOnce();
 		expect(row.capturedAmountMinor).toBe(10000);
 	});
+	it("completes its pending journal once native history proves the capture a webhook recorded", async () => {
+		const capture = vi.fn(async () => {
+			throw new Error("response timeout");
+		});
+		const { post, row } = await setup(capture, undefined, {
+			fetchOrder: async () => ({
+				providerOrderId: orderId,
+				status: "fully_captured",
+				totalAmount: { amount: "100.00", currency: "SAR" },
+				capturedAmountMinor: 10000,
+				refundedAmountMinor: 0,
+				canceledAmountMinor: 0,
+				operations: [
+					{ id: "auto-capture-native", kind: "captured", amountMinor: 10000, currency: "SAR" },
+				],
+				raw: {},
+			}),
+		});
+		expect((await post()).error).toBeTruthy();
+		await post("capture-confirmed", {
+			kind: "captured",
+			provider: "tamara",
+			orderId,
+			captureId: "auto-capture-native",
+			amountMinor: 10000,
+			currency: "SAR",
+			raw: {},
+		});
+		expect(JSON.parse(String((row as Record<string, unknown>).moneyCommands))).toEqual([
+			expect.objectContaining({ state: "pending" }),
+		]);
+		expect((await post("capture-retry")).error).toBeNull();
+		expect(capture).toHaveBeenCalledOnce();
+		expect(row.capturedAmountMinor).toBe(10000);
+		expect(JSON.parse(String((row as Record<string, unknown>).moneyCommands))).toEqual([
+			expect.objectContaining({ state: "completed" }),
+		]);
+	});
 	it.each([{ providerOrderId: "another-order" }, { amountMinor: 9000 }])(
 		"rejects inconsistent provider capture result %j",
 		async (override) => {
@@ -211,5 +258,49 @@ describe("durable automatic capture intent", () => {
 		state.current = row;
 		expect((await post()).error).toBeTruthy();
 		expect(row.capturedAmountMinor).toBe(0);
+	});
+	it("withholds capture when the provider requires shipping details and none are supplied", async () => {
+		const capture = vi.fn(async () => result());
+		const base = stubProvider("custom");
+		const provider = stubProvider("custom", {
+			capabilities: { ...base.capabilities, captureRequiresShipping: true },
+			capture,
+			verifyWebhook: async (request) => ({
+				ok: true,
+				payload: JSON.parse(request.rawBody),
+				rawBody: request.rawBody,
+				dedupKey: "shipping-trigger",
+			}),
+			toCanonicalEvent: (payload) => payload.event as BnplWebhookEvent,
+		});
+		const instance = await makeBnplTestInstance([
+			bnpl({
+				providers: { custom: provider },
+				persistOrders: true,
+				captureOnAuthorise: true,
+				use: [webhooks()],
+			}),
+		]);
+		instance.db.bnplOrder?.push({
+			id: "shipping-row",
+			provider: "custom",
+			providerOrderId: orderId,
+			orderReferenceId: "shipping-ref",
+			status: "authorised",
+			amountMinor: 10000,
+			currency: "SAR",
+			capturedAmountMinor: 0,
+			canceledAmountMinor: 0,
+			refundedAmountMinor: 0,
+			version: 0,
+			createdAt: new Date(),
+			updatedAt: new Date(),
+		});
+		const response = await instance.client.$fetch("/bnpl/webhooks/custom", {
+			method: "POST",
+			body: { event: { kind: "authorized", provider: "custom", orderId, raw: {} } },
+		});
+		expect(response.error).toMatchObject({ status: 500 });
+		expect(capture).not.toHaveBeenCalled();
 	});
 });
