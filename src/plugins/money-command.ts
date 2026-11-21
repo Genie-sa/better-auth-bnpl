@@ -1,9 +1,10 @@
 import type { GenericEndpointContext } from "better-auth";
 import { APIError } from "better-auth/api";
 import { BnplProviderError, isDefinitiveRejection } from "../core/errors";
+import { parseAmount } from "../core/money";
 import type { BnplProvider } from "../core/provider";
-import { isAuthorisedState } from "../core/status";
-import type { BnplCaptureResult, BnplRefundResult } from "../core/types";
+import { isAuthorisedState, statusFromBalances } from "../core/status";
+import type { BnplCaptureResult, BnplOrderState, BnplRefundResult } from "../core/types";
 import { commandInputHash } from "./command-input";
 import {
 	type OrderBaseline,
@@ -232,6 +233,18 @@ export function reportsAuthorisedState(error: unknown): boolean {
 		(error instanceof BnplProviderError &&
 			error.conflictingState !== undefined &&
 			isAuthorisedState(error.conflictingState))
+	);
+}
+
+/** Whether a verified provider snapshot proves the order was authorised, judged by its balances. */
+export function remoteShowsAuthorisation(remote: BnplOrderState): boolean {
+	return isAuthorisedState(
+		statusFromBalances(remote.status, {
+			amountMinor: parseAmount(remote.totalAmount),
+			captured: remote.capturedAmountMinor,
+			refunded: remote.refundedAmountMinor,
+			canceled: remote.canceledAmountMinor ?? 0,
+		}),
 	);
 }
 

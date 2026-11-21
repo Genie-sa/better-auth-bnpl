@@ -299,6 +299,25 @@ describe.skipIf(!hasNodeSqlite)("mutateOrder against the real SQLite adapter", (
 		});
 		expect(rows).toHaveLength(1);
 	});
+	it("records both events when different kinds race on one dedup key", async () => {
+		const { ctx } = await makeSqliteCtx();
+		const input = (kind: "approved" | "declined") => ({
+			provider: "foo",
+			event: { kind, provider: "foo", orderId: "order-1", raw: null },
+			dedupKey: "shared-status-key",
+			rawBody: JSON.stringify({ kind }),
+		});
+		const results = await Promise.all([
+			recordWebhookEvent(ctx, input("approved")),
+			recordWebhookEvent(ctx, input("declined")),
+		]);
+		expect(results.map((result) => result.outcome)).toEqual(["inserted", "inserted"]);
+		const rows = await ctx.context.adapter.findMany<StoredWebhookEvent>({
+			model: "bnplWebhookEvent",
+			where: [{ field: "provider", value: "foo" }],
+		});
+		expect(rows.map((row) => row.eventKind).sort()).toEqual(["approved", "declined"]);
+	});
 	it("still classifies an existing provider-owned legacy key for safe redelivery", async () => {
 		const { ctx } = await makeSqliteCtx();
 		await ctx.context.adapter.create({

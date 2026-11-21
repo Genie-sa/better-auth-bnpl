@@ -19,6 +19,7 @@ import type { BnplOptions } from "../plugin-types";
 import { type AdminAuthorizer, assertAdmin } from "./admin";
 import {
 	automaticCaptureReference,
+	remoteShowsAuthorisation,
 	reportsAuthorisedState,
 	runMoneyCommand,
 	settleLostAutomaticCaptures,
@@ -508,24 +509,36 @@ async function processDelivery(
 		redelivery?: boolean;
 	},
 ): Promise<WebhookAck> {
-	const claimed = await claimWebhookEvent(ctx, row);
+	const claimed = await claimWebhookEvent(ctx, row, {
+		resetHandlers: deps.redelivery === true && row.status === "processed",
+	});
 	if (!claimed)
 		throw new APIError("SERVICE_UNAVAILABLE", {
 			message: "Webhook event is already being processed",
 			code: "WEBHOOK_PROCESSING",
 		});
-	const checkpoint: {
-		completed: string[];
-		contexts: Record<string, z.infer<typeof cancellationContextSchema>>;
-	} = deliveryCheckpointSchema.parse(
-		claimed.deliveryState ? JSON.parse(claimed.deliveryState) : [],
-	);
-	if (deps.redelivery && row.status === "processed") checkpoint.completed = [];
-	const completed = checkpoint.completed;
 	try {
-		const events = deps.events ?? [event];
+		const checkpoint: {
+			completed: string[];
+			contexts: Record<string, z.infer<typeof cancellationContextSchema>>;
+		} = deliveryCheckpointSchema.parse(
+			claimed.deliveryState ? JSON.parse(claimed.deliveryState) : [],
+		);
+		const completed = checkpoint.completed;
+		const stored = parseStoredRawData(row.rawData);
+		const storedEvent =
+			stored && !provider.toCanonicalEvents ? provider.toCanonicalEvent(stored) : null;
+		const events = stored
+			? (provider.toCanonicalEvents?.(stored) ?? (storedEvent ? [storedEvent] : [event]))
+			: (deps.events ?? [event]);
+		const payload = stored ?? verification.payload;
+		const rawBody = row.rawData ?? verification.rawBody;
 		for (const [index, incomingEvent] of events.entries()) {
-			const frozen = checkpoint.contexts[index];
+			const saved = checkpoint.contexts[index];
+			const frozen =
+				saved && (await isDeliveryApplied(ctx, provider, incomingEvent, `${row.id}:${index}`))
+					? saved
+					: undefined;
 			const normalized = frozen
 				? {
 						event: {
@@ -564,12 +577,12 @@ async function processDelivery(
 				ctx,
 				provider,
 				currentEvent,
-				verification.rawBody,
+				rawBody,
 				`${row.id}:${index}`,
 				claimed.orderApplied === true,
 				remote ? { remote, cancelId: cancelIdOf(incomingEvent) } : undefined,
 			);
-			await completeEvent(provider, ctx, currentEvent, verification.payload, options, {
+			await completeEvent(provider, ctx, currentEvent, payload, options, {
 				statusChange: application.statusChange,
 				webhookOptions: deps.webhookOptions,
 				dispatchTyped: application.dispatchTyped,
@@ -604,6 +617,20 @@ async function processDelivery(
 		});
 	}
 	return ackReceived(ctx, provider.id, event);
+}
+
+async function isDeliveryApplied(
+	ctx: GenericEndpointContext,
+	provider: BnplProvider,
+	event: BnplWebhookEvent,
+	deliveryKey: string,
+): Promise<boolean> {
+	if (!("orderId" in event) || !event.orderId) return false;
+	const order = await ctx.context.adapter.findOne<OrderRecord>({
+		model: "bnplOrder",
+		where: orderWhere(provider.id, event.orderId),
+	});
+	return readAppliedOperations(order?.appliedOperations).includes(`delivery:${deliveryKey}`);
 }
 
 /** Runs the automatic payment steps an event triggers, then the integrator's handlers. */
@@ -804,11 +831,13 @@ async function persistOrderUpdate(
 					? { from: existing.status, to: finalStatus, provider: existing.provider }
 					: null;
 			if (statusChange) transitions[deliveryKey] = statusChange;
+			const moneyApplied =
+				update.capturedAmountMinor !== undefined || update.refundedAmountMinor !== undefined;
 			return {
 				...update,
 				appliedOperations: JSON.stringify([
 					...importedKeys,
-					...(operationKey ? [operationKey] : []),
+					...(operationKey && moneyApplied ? [operationKey] : []),
 					marker,
 				]),
 				webhookTransitions: JSON.stringify(transitions),
@@ -868,7 +897,13 @@ function computeEventTarget(
 					throw new Error("bnpl: updated order total is below its committed balance");
 				Object.assign(update, { amountMinor });
 			}
-			return event.status ?? existing.status;
+			if (!event.status) return existing.status;
+			return statusFromBalances(event.status, {
+				amountMinor: (update as { amountMinor?: number }).amountMinor ?? existing.amountMinor,
+				captured: existing.capturedAmountMinor,
+				refunded: existing.refundedAmountMinor,
+				canceled: existing.canceledAmountMinor ?? 0,
+			});
 		default:
 			return existing.status;
 	}
@@ -973,7 +1008,7 @@ async function runAutoAuthorise(
 				} catch (e) {
 					if (!recoveryRequested && !reportsAuthorisedState(e)) return failed(e);
 					const remote = await provider.fetchOrder(orderId, { logger: ctx.context.logger });
-					if (!isAuthorisedState(remote.status))
+					if (!remoteShowsAuthorisation(remote))
 						return {
 							outcome: { status: "failed", error: e instanceof Error ? e : new Error(String(e)) },
 							capture: false,

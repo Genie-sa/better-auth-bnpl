@@ -16,6 +16,7 @@ import type { BnplOptions } from "../plugin-types";
 import {
 	type MoneyCommand,
 	type MoneyCommandSpec,
+	remoteShowsAuthorisation,
 	reportsAlreadyCanceled,
 	reportsAlreadyClosed,
 	reportsAuthorisedState,
@@ -524,13 +525,15 @@ export const admin = (adminOptions: AdminSubpluginOptions) => {
 						onPending: "verify",
 						recordBaseline: true,
 						check: (order) => {
-							if (
-								amountMinor !== undefined &&
-								amountMinor + order.capturedAmountMinor + (order.canceledAmountMinor ?? 0) >
-									order.amountMinor
-							)
+							const uncommitted =
+								order.amountMinor - order.capturedAmountMinor - (order.canceledAmountMinor ?? 0);
+							if (amountMinor !== undefined && amountMinor > uncommitted)
 								throw new APIError("BAD_REQUEST", {
 									message: "Cancellation exceeds remaining order balance",
+								});
+							if (closesPayment && amountMinor !== undefined && amountMinor !== uncommitted)
+								throw new APIError("BAD_REQUEST", {
+									message: "This provider's cancellation must cover the full uncaptured balance",
 								});
 							return {
 								verifyClosure:
@@ -581,16 +584,8 @@ export const admin = (adminOptions: AdminSubpluginOptions) => {
 							const remote = await provider.fetchOrder(orderId, { logger: ctx.context.logger });
 							if (closesPayment) {
 								readRemoteHistory(provider, { ...row, ...before }, remote);
-								if (
-									!(remote.closed === true || confirmsClosure(remote)) ||
-									(amountMinor !== undefined &&
-										(remote.capturedAmountMinor !== before.capturedAmountMinor ||
-											amountMinor !==
-												row.amountMinor - before.capturedAmountMinor - before.canceledAmountMinor))
-								)
-									throw new Error(
-										"bnpl: remote payment does not confirm closure of the remaining balance",
-									);
+								if (!(remote.closed === true || confirmsClosure(remote)))
+									throw new Error("bnpl: remote payment does not confirm closure");
 							} else if (amountMinor !== undefined) {
 								if (
 									!attributePendingOperations(
@@ -728,13 +723,20 @@ export const admin = (adminOptions: AdminSubpluginOptions) => {
 							return settled;
 						} catch (e) {
 							if (recoveryRequested || reportsAuthorisedState(e)) {
-								const remote = await provider.fetchOrder(orderId, { logger: ctx.context.logger });
-								if (remote.providerOrderId === orderId && isAuthorisedState(remote.status)) {
-									const response = { orderId, status: remote.status, already: true };
-									return await command.settle((order) => ({
-										response,
-										patch: { ...importSnapshot(order, provider, remote), authorisedAt: new Date() },
-									}));
+								try {
+									const remote = await provider.fetchOrder(orderId, { logger: ctx.context.logger });
+									if (remote.providerOrderId === orderId && remoteShowsAuthorisation(remote)) {
+										const response = { orderId, status: remote.status, already: true };
+										return await command.settle((order) => ({
+											response,
+											patch: {
+												...importSnapshot(order, provider, remote),
+												authorisedAt: new Date(),
+											},
+										}));
+									}
+								} catch (recoveryError) {
+									throwAdminOperationError(ctx, recoveryError, "authorise", "AUTHORISE_FAILED");
 								}
 							}
 							throwAdminOperationError(ctx, e, "authorise", "AUTHORISE_FAILED");

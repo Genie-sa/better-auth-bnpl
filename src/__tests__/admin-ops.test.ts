@@ -135,7 +135,7 @@ describe("admin order operations", () => {
 		expect(orderRow(instance).capturedAmountMinor).toBe(1000);
 	});
 	it("keeps a partially canceled order authorised", async () => {
-		const provider = stubProvider("tabby", {
+		const provider = stubProvider("tamara", {
 			cancel: async () => ({
 				providerOrderId: ORDER_ID,
 				status: "authorised",
