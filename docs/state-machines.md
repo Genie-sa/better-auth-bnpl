@@ -248,12 +248,23 @@ All findings were reviewed by three parties: the original audit, plus independen
 | F23 | Low | An authorise response reporting a zero capture stored `partially_captured`. | Derive the capture status only for positive captures. | Neon re-review; regression test |
 | F24 | Low | Cancellation events carried `authorised` to handlers for captured orders; a refund that arrived before its capture derived `fully_refunded`; a reconciled closed Tabby payment could not leave `new`/`approved`. | Balance-derived event status; amount base for early refunds; `new`/`approved` → `closed` allowed. | Neon re-review; regression tests |
 | F25 | Medium | Target-state refusals for void, amount-bearing cancel, and non-Tabby amountless cancel stayed pending even though recovery could never prove them. The early-refund webhook base also ignored canceled amounts. | Recoverable targets now mirror what each recovery can prove; the early-refund base is amount − canceled. | Neon and Astra confirmation reviews; regression tests |
+| F26 | Medium | An uncertain capture or refund blocked the order until manual repair. | Resolved in 0.4.0 by completing a pending capture or refund from native history (Tabby by merchant reference), never by resending. | Round-2 hunts; 0.4.0 regression tests |
+| F27 | High | A failed Tabby snapshot retried with its records reordered had the same dedup key but different index meanings, so a capture was skipped permanently. | Rebuild events from the stored first-delivery payload. | Astra round-2 hunt; regression test |
+| F28 | High | A Tamara cancellation context frozen before its order write could go stale after a concurrent capture or failed write, failing every retry and redelivery. | Trust the frozen context only after the order write commits; otherwise re-verify. | Astra and Neon round-2 hunts; regression tests |
+| F29 | Medium | An older Tabby snapshot (refund or closed) arriving late could set `partially_refunded` or `closed` over newer refund balances. | Snapshot status derives from committed balances. | Astra and Neon round-2 hunts; regression tests |
+| F30 | High | A Tabby cancel with an amount that failed while reading the payment (before close) stayed pending. | Resolved in 0.4.0: failures before a mutation is sent release the command. | Neon round-2 hunt; regression test |
+| F31 | High | A payment-closing cancel against stale local captures could close the payment and then fail recovery forever, blocking refunds. | Require the amount to equal the local uncaptured balance before reserving; recovery accepts any verified closure. | Neon round-2 hunt; regression tests |
+| F32 | Medium | Ignored money notifications (zero amount or wrong currency) still added their operation key, so later history checks failed forever. | Record the key only when a delta was applied. | Neon round-2 hunt; regression test |
+| F33 | Medium | Authorise recovery checked the raw native status, so a Tamara order captured in part and canceled for the rest never recovered. | Judge authorisation by balance-derived status; admin recovery errors map to `AUTHORISE_FAILED`. | Neon round-2 hunt; regression tests |
+| F34 | Medium | An admin redelivery reset its handler checkpoints only in memory, so a failure or crash before the first handler made the retry run no handlers. | The reset is written in the same conditional claim; checkpoint parsing failures mark the delivery failed. | Neon and Astra round-2 reviews; regression tests |
+| F35 | High | Webhook dedup keys could collide across event kinds (for example a Tamara decline and a later approval under the shared authorise key), so the approval was acknowledged as a duplicate. | An existing row of a different event kind, found before or after a racing insert, is not a duplicate; the new event gets a kind-qualified key. Key formats are unchanged. | Astra round-2 review and confirmation; regression tests (including a SQLite race) |
+| F36 | Medium | Single-event providers (Tamara) processed retries from the incoming payload, so handlers could see different data under one delivery ID. | Use the stored payload for events, persistence, and handlers for every provider. | Astra round-2 review; regression test |
 
 ### Residual risks
 
 | ID | Severity | Risk | Status |
 | --- | --- | --- | --- |
-| R1 | Design | An uncertain capture or refund (timeout, 5xx, unreadable response) blocks the order until an operator verifies the provider and edits the journal. Cancel, void, close, and authorise recover through GET. Tabby documents `reference_id` as an idempotency key, so a guarded Tabby-only retry could recover captures and refunds. | Follow-up |
+| R1 | Design | An uncertain capture or refund that native history cannot uniquely attribute (for example an ambiguous Tamara refund) still blocks the order until an operator verifies the provider. | By design: never resend money without proof |
 | R2 | Low | `TERMINAL_STATUSES` keeps its published members; its meaning is now documented. | Changing the set is a breaking change |
 | R3 | Low | Tamara's current spec marks `risk_assessment` as required. The sandbox accepted checkouts without it on 2026-11-21; if Tamara enforces it, the checkout is cleanly rejected and its reservation discarded. | Document; pass `providerData.riskAssessment` |
 | R4 | Low | Tabby's current spec removed Kuwait/KWD. The plugin still advertises KW/KWD for Tabby. | Follow-up (minor release) |
@@ -272,4 +283,7 @@ All findings were reviewed by three parties: the original audit, plus independen
 | 2026-11-21 | Mutation checks (each fix reverted in turn) | All 35 targeted mutations caught by regression tests |
 | 2026-11-21 | Live sandbox after fixes | All 6 Tabby/Tamara probe scenarios passed |
 | 2026-11-21 | Compatibility (zod 4; Better Auth 1.6.23) | Full suite passes on each |
-| 2026-11-21 | `pnpm check` | Lint, typecheck, 747 tests across 42 files, and builds pass |
+| 2026-11-21 | Released 0.3.2, then 0.4.0 (Order and Money command modules) | npm and GitHub releases |
+| 2026-11-21 | Round-2 independent hunts and reviews (Neon, Astra) | F26–F36; rebased onto 0.4.0, where F26 and F30 were already resolved |
+| 2026-11-21 | Mutation checks on the rebased fixes | All 10 ported fixes caught by regression tests |
+| 2026-11-21 | `pnpm check` | Lint, typecheck, 864 tests, and builds pass |

@@ -100,6 +100,8 @@ export async function recordWebhookEvent(
 	const dedupKey = storageDedupKey(input.provider, input.dedupKey);
 	const existing = await findProviderEvent(ctx, input.provider, input.dedupKey);
 	if (existing.error) return { outcome: "infra-error", error: existing.error };
+	if (existing.row && existing.row.eventKind !== input.event.kind)
+		return recordWebhookEvent(ctx, { ...input, dedupKey: `${input.dedupKey}#${input.event.kind}` });
 	if (existing.row) return classifyExisting(existing.row);
 	try {
 		const created = await ctx.context.adapter.create<StoredWebhookEvent>({
@@ -122,6 +124,11 @@ export async function recordWebhookEvent(
 	} catch (createError) {
 		const raced = await findProviderEvent(ctx, input.provider, input.dedupKey);
 		if (raced.error) return { outcome: "infra-error", error: raced.error };
+		if (raced.row && raced.row.eventKind !== input.event.kind)
+			return recordWebhookEvent(ctx, {
+				...input,
+				dedupKey: `${input.dedupKey}#${input.event.kind}`,
+			});
 		if (raced.row) return classifyExisting(raced.row);
 		ctx.context.logger.error(
 			`bnpl: failed to record webhook event ${input.dedupKey} and no row exists — treating as infrastructural: ${createError instanceof Error ? createError.message : createError}`,
@@ -134,9 +141,18 @@ function classifyExisting(row: StoredWebhookEvent): RecordWebhookEventResult {
 	return { outcome: "reprocess", row };
 }
 const PROCESSING_LEASE_MS = 5 * 60 * 1000;
+function withoutCompletedHandlers(deliveryState: string | null | undefined): string {
+	const parsed: unknown = deliveryState ? JSON.parse(deliveryState) : [];
+	return JSON.stringify(
+		Array.isArray(parsed) || parsed === null || typeof parsed !== "object"
+			? []
+			: { ...parsed, completed: [] },
+	);
+}
 export async function claimWebhookEvent(
 	ctx: GenericEndpointContext,
 	row: StoredWebhookEvent,
+	options: { resetHandlers?: boolean } = {},
 ): Promise<StoredWebhookEvent | null> {
 	if (
 		row.status === "processing" &&
@@ -157,6 +173,9 @@ export async function claimWebhookEvent(
 			status: "processing",
 			processingToken,
 			processingUntil: new Date(Date.now() + PROCESSING_LEASE_MS),
+			...(options.resetHandlers
+				? { deliveryState: withoutCompletedHandlers(row.deliveryState) }
+				: {}),
 		},
 	});
 }

@@ -7,12 +7,14 @@ import { bnpl } from "../plugin";
 import { admin } from "../plugins/admin";
 import {
 	claimWebhookEvent,
+	markWebhookEventProcessed,
 	recordWebhookEvent,
 	saveWebhookDeliveryState,
 } from "../plugins/webhook-events";
 import { webhooks } from "../plugins/webhooks";
 import { tabby } from "../providers/tabby";
 import { tabbyToCanonicalEvents } from "../providers/tabby/adapter";
+import { tamaraDedupKey } from "../providers/tamara/adapter";
 import { makeBnplTestInstance, stubProvider } from "./_harness";
 
 const orderId = "hardening-order";
@@ -540,5 +542,387 @@ describe("request validation at the boundary", () => {
 		expect(result.error?.status).toBe(400);
 		expect(capture).not.toHaveBeenCalled();
 		expect(journal()).toEqual([]);
+	});
+});
+
+describe("Tabby snapshot deliveries", () => {
+	async function setupTabbySnapshots(row: Record<string, unknown> = {}) {
+		const instance = await makeBnplTestInstance([
+			bnpl({
+				providers: {
+					tabby: tabby({
+						secretKey: "sk_test_unit",
+						merchantCode: "unit",
+						webhookHeader: { name: "X-Test", value: "unit" },
+						fetch: async () => Response.json({}),
+					}),
+				},
+				persistOrders: true,
+				use: [webhooks()],
+			}),
+		]);
+		const stored: Record<string, unknown> = {
+			id: "snapshot-row",
+			provider: "tabby",
+			providerOrderId: orderId,
+			orderReferenceId: "snapshot-ref",
+			status: "authorised",
+			amountMinor: 10000,
+			currency: "SAR",
+			capturedAmountMinor: 0,
+			refundedAmountMinor: 0,
+			canceledAmountMinor: 0,
+			version: 0,
+			createdAt: new Date(),
+			updatedAt: new Date(),
+			...row,
+		};
+		instance.db.bnplOrder?.push(stored);
+		const deliver = (payment: Record<string, unknown>) =>
+			instance.client.$fetch("/bnpl/webhooks/tabby", {
+				method: "POST",
+				headers: { "X-Test": "unit" },
+				body: { id: orderId, amount: "100.00", currency: "SAR", ...payment },
+			});
+		return { instance, stored, deliver };
+	}
+	const capture = (id: string, amount: string) => ({ id, amount, reference_id: id });
+
+	it("applies every capture when a failed snapshot is retried with its records reordered", async () => {
+		const { instance, stored, deliver } = await setupTabbySnapshots();
+		const context = await instance.auth.$context;
+		const original = context.adapter.incrementOne.bind(context.adapter);
+		const write = vi.spyOn(context.adapter, "incrementOne").mockImplementation(async (args) => {
+			if (
+				args.model === "bnplOrder" &&
+				String(args.set?.appliedOperations).includes("tabby:captured:B")
+			)
+				throw new Error("order write unavailable");
+			return original(args);
+		});
+		const first = await deliver({
+			status: "AUTHORIZED",
+			captures: [capture("A", "30.00"), capture("B", "20.00")],
+		});
+		expect(first.error?.status).toBe(500);
+		expect(stored.capturedAmountMinor).toBe(3000);
+		write.mockRestore();
+		const retry = await deliver({
+			status: "AUTHORIZED",
+			captures: [capture("B", "20.00"), capture("A", "30.00")],
+		});
+		expect(retry.error).toBeNull();
+		expect(stored).toMatchObject({ capturedAmountMinor: 5000, status: "partially_captured" });
+	});
+
+	it("does not let a late closed snapshot hide a refund", async () => {
+		const { stored, deliver } = await setupTabbySnapshots({
+			status: "partially_refunded",
+			capturedAmountMinor: 4000,
+			refundedAmountMinor: 2000,
+			appliedOperations: JSON.stringify(["tabby:captured:c1", "tabby:refunded:r1"]),
+		});
+		const result = await deliver({ status: "CLOSED", captures: [capture("c1", "40.00")] });
+		expect(result.error).toBeNull();
+		expect(stored.status).toBe("partially_refunded");
+	});
+	it("does not let an older refund snapshot reverse a completed refund", async () => {
+		const { stored, deliver } = await setupTabbySnapshots({
+			status: "fully_captured",
+			capturedAmountMinor: 10000,
+			appliedOperations: JSON.stringify(["tabby:captured:c1"]),
+		});
+		const captures = [capture("c1", "100.00")];
+		const latest = await deliver({
+			status: "CLOSED",
+			captures,
+			refunds: [capture("r1", "40.00"), capture("r2", "60.00")],
+		});
+		expect(latest.error).toBeNull();
+		expect(stored.status).toBe("fully_refunded");
+		const older = await deliver({ status: "CLOSED", captures, refunds: [capture("r1", "40.00")] });
+		expect(older.error).toBeNull();
+		expect(stored).toMatchObject({ status: "fully_refunded", refundedAmountMinor: 10000 });
+	});
+});
+
+describe("round-two hunt regressions", () => {
+	const tabbyConfig = {
+		secretKey: "sk_test_unit",
+		merchantCode: "unit",
+		webhookHeader: { name: "X-Test", value: "unit" },
+	};
+	it("marks a Tabby cancel that failed before closing as a definitive rejection", async () => {
+		const methods: string[] = [];
+		const provider = tabby({
+			...tabbyConfig,
+			fetch: async (_url, init) => {
+				methods.push(String(init?.method));
+				return Response.json({ error: "unavailable" }, { status: 503 });
+			},
+		});
+		const error = await provider
+			.cancel(orderId, { totalAmount: sar("100.00") }, { logger: console })
+			.catch((e: unknown) => e);
+		expect(isDefinitiveRejection(error)).toBe(true);
+		expect(methods.every((method) => method === "GET")).toBe(true);
+	});
+	it("refuses a Tabby cancel that does not cover the locally known uncaptured balance", async () => {
+		const cancel = vi.fn(async () => undefined);
+		const { post, journal } = await setup("tabby", { cancel });
+		const result = await post("cancel", {
+			totalAmount: sar("60.00"),
+			merchantReferenceId: "stale",
+		});
+		expect(result.error?.status).toBe(400);
+		expect(cancel).not.toHaveBeenCalled();
+		expect(journal()).toEqual([]);
+	});
+	it("completes a pending Tabby cancel once the payment is verified closed, even after a new capture", async () => {
+		let attempt = 0;
+		const cancel = vi.fn(async () => {
+			attempt++;
+			if (attempt === 1) throw new BnplProviderError("tabby", "timed out");
+		});
+		const closed = snapshot({
+			status: "closed",
+			capturedAmountMinor: 4000,
+			operations: [{ kind: "captured", id: "capture-1", amountMinor: 4000, currency: "SAR" }],
+			raw: { status: "CLOSED" },
+		});
+		const { stored, post, journal } = await setup("tabby", {
+			cancel,
+			fetchOrder: async () => closed,
+		});
+		const body = { totalAmount: sar("100.00"), merchantReferenceId: "close-all" };
+		expect((await post("cancel", body)).error).not.toBeNull();
+		expect(journal()).toEqual(["pending"]);
+		expect((await post("cancel", body)).error).toBeNull();
+		expect(cancel).toHaveBeenCalledOnce();
+		expect(stored).toMatchObject({ status: "closed", capturedAmountMinor: 4000 });
+		expect(journal()).toEqual(["completed"]);
+	});
+	it("keeps an ignored zero-amount notification out of the operation ledger", async () => {
+		const { stored, webhook } = await setup("tamara", {});
+		await webhook("zero-ledger", {
+			kind: "captured",
+			provider: "tamara",
+			orderId,
+			captureId: "zero",
+			amountMinor: 0,
+			currency: "SAR",
+			raw: { data: { captured_amount: sar("0.00") } },
+		});
+		expect(String(stored.appliedOperations)).not.toContain("zero");
+	});
+	it("recovers a pending authorise when the order was partially captured and the rest canceled", async () => {
+		const authorize = vi.fn(async () => {
+			throw new BnplProviderError("tamara", "timed out");
+		});
+		const fetchOrder = async () =>
+			snapshot({
+				status: "canceled",
+				capturedAmountMinor: 4000,
+				canceledAmountMinor: 6000,
+				operations: [
+					{ kind: "captured", id: "capture-1", amountMinor: 4000, currency: "SAR" },
+					{ kind: "canceled", id: "cancel-1", amountMinor: 6000, currency: "SAR" },
+				],
+			});
+		const { stored, post, journal } = await setup(
+			"tamara",
+			{ authorize, fetchOrder },
+			{ status: "approved" },
+		);
+		expect((await post("authorise")).error).not.toBeNull();
+		expect((await post("authorise")).error).toBeNull();
+		expect(stored).toMatchObject({ status: "fully_captured", capturedAmountMinor: 4000 });
+		expect(journal()).toEqual(["completed"]);
+	});
+	it("keeps the 0.3.2 dedup key for Tamara status notifications", () => {
+		const base = { order_id: "o-1", order_reference_id: "r-1" };
+		expect(tamaraDedupKey({ ...base, order_status: "declined" })).toBe("tamara:authorise:o-1");
+		expect(tamaraDedupKey({ ...base, order_status: "approved" })).toBe("tamara:authorise:o-1");
+	});
+});
+
+describe("webhook redelivery checkpoint", () => {
+	it("still runs handlers when a redelivery fails before its first handler and is retried", async () => {
+		const onPayload = vi.fn();
+		const provider = stubProvider("tamara", {
+			verifyWebhook: async (request) => ({
+				ok: true,
+				payload: JSON.parse(request.rawBody),
+				rawBody: request.rawBody,
+				dedupKey: "redelivery-delivery",
+			}),
+			toCanonicalEvent: () => ({ kind: "updated", provider: "tamara", orderId, raw: {} }),
+		});
+		const instance = await makeBnplTestInstance([
+			bnpl({
+				providers: { tamara: provider },
+				persistOrders: true,
+				use: [webhooks({ onPayload, redelivery: { isAuthorized: () => true } })],
+			}),
+		]);
+		instance.db.bnplOrder?.push({
+			id: "redelivery-row",
+			provider: "tamara",
+			providerOrderId: orderId,
+			orderReferenceId: "redelivery-ref",
+			status: "authorised",
+			amountMinor: 10000,
+			currency: "SAR",
+			capturedAmountMinor: 0,
+			refundedAmountMinor: 0,
+			version: 0,
+			createdAt: new Date(),
+			updatedAt: new Date(),
+		});
+		const { headers } = await instance.signInWithTestUser();
+		expect(
+			(await instance.client.$fetch("/bnpl/webhooks/tamara", { method: "POST", body: {} })).error,
+		).toBeNull();
+		const eventId = String(instance.db.bnplWebhookEvent?.[0]?.id);
+		const redeliver = () =>
+			instance.client.$fetch(`/bnpl/admin/webhook-events/${eventId}/redeliver`, {
+				method: "POST",
+				headers,
+			});
+		const context = await instance.auth.$context;
+		const original = context.adapter.findOne.bind(context.adapter);
+		let failNextOrderRead = true;
+		const read = vi.spyOn(context.adapter, "findOne").mockImplementation(async (args) => {
+			if (args.model === "bnplOrder" && failNextOrderRead) {
+				failNextOrderRead = false;
+				throw new Error("order store unavailable");
+			}
+			return original(args);
+		});
+		expect((await redeliver()).error).not.toBeNull();
+		read.mockRestore();
+		expect((await redeliver()).error).toBeNull();
+		expect(onPayload).toHaveBeenCalledTimes(2);
+	});
+});
+
+describe("round-two review regressions", () => {
+	it("does not treat an event of a different kind under the same dedup key as a duplicate", async () => {
+		const { instance } = await setup("tamara", {});
+		const ctx = { context: await instance.auth.$context } as GenericEndpointContext;
+		const declined = await recordWebhookEvent(ctx, {
+			provider: "tamara",
+			event: { kind: "declined", provider: "tamara", orderId, raw: {} },
+			dedupKey: "tamara:authorise:legacy-order",
+			rawBody: "{}",
+		});
+		if (declined.outcome !== "inserted") throw new Error("expected a new event");
+		const claimed = await claimWebhookEvent(ctx, declined.row);
+		if (!claimed) throw new Error("expected a claim");
+		await markWebhookEventProcessed(ctx, claimed);
+		const approved = await recordWebhookEvent(ctx, {
+			provider: "tamara",
+			event: { kind: "approved", provider: "tamara", orderId, raw: {} },
+			dedupKey: "tamara:authorise:legacy-order",
+			rawBody: "{}",
+		});
+		expect(approved.outcome).toBe("inserted");
+	});
+
+	it("processes a retried single-event delivery from its stored payload", async () => {
+		const { instance, stored, webhook } = await setup("tamara", {
+			verifyWebhook: async (request) => ({
+				ok: true,
+				payload: JSON.parse(request.rawBody),
+				rawBody: request.rawBody,
+				dedupKey: "stable-capture-delivery",
+			}),
+		});
+		const context = await instance.auth.$context;
+		const original = context.adapter.incrementOne.bind(context.adapter);
+		let failOrderWrite = true;
+		vi.spyOn(context.adapter, "incrementOne").mockImplementation(async (args) => {
+			if (args.model === "bnplOrder" && failOrderWrite) {
+				failOrderWrite = false;
+				throw new Error("order write unavailable");
+			}
+			return original(args);
+		});
+		const captured = (amountMinor: number): BnplWebhookEvent => ({
+			kind: "captured",
+			provider: "tamara",
+			orderId,
+			captureId: "same-capture",
+			amountMinor,
+			currency: "SAR",
+			raw: {},
+		});
+		expect((await webhook("first", captured(1000))).error).not.toBeNull();
+		expect((await webhook("retry", captured(2000))).error).toBeNull();
+		expect(stored.capturedAmountMinor).toBe(1000);
+	});
+
+	it("clears handler checkpoints in the same write that claims a processed event for redelivery", async () => {
+		const { instance } = await setup("tamara", {});
+		const ctx = { context: await instance.auth.$context } as GenericEndpointContext;
+		const recorded = await recordWebhookEvent(ctx, {
+			provider: "tamara",
+			event: { kind: "approved", provider: "tamara", orderId, raw: {} },
+			dedupKey: "redelivery-claim",
+			rawBody: "{}",
+		});
+		if (recorded.outcome !== "inserted") throw new Error("expected a new event");
+		const first = await claimWebhookEvent(ctx, recorded.row);
+		if (!first) throw new Error("expected a claim");
+		await saveWebhookDeliveryState(ctx, first, { completed: ["0:payload"], contexts: {} });
+		await markWebhookEventProcessed(ctx, first);
+		const processed = instance.db.bnplWebhookEvent?.find((row) => row.id === recorded.row.id);
+		const reclaimed = await claimWebhookEvent(
+			ctx,
+			processed as unknown as Parameters<typeof claimWebhookEvent>[1],
+			{ resetHandlers: true },
+		);
+		expect(JSON.parse(String(reclaimed?.deliveryState)).completed).toEqual([]);
+	});
+});
+
+describe("round-two review test gaps", () => {
+	it("recovers webhook authorisation from balance-derived status", async () => {
+		const authorize = vi.fn(async () => {
+			throw new BnplProviderError("tamara", "timed out");
+		});
+		const fetchOrder = async () =>
+			snapshot({
+				status: "canceled",
+				capturedAmountMinor: 4000,
+				canceledAmountMinor: 6000,
+				operations: [
+					{ kind: "captured", id: "capture-1", amountMinor: 4000, currency: "SAR" },
+					{ kind: "canceled", id: "cancel-1", amountMinor: 6000, currency: "SAR" },
+				],
+			});
+		const { stored, webhook, journal } = await setup(
+			"tamara",
+			{ authorize, fetchOrder },
+			{ status: "approved" },
+		);
+		const approved: BnplWebhookEvent = { kind: "approved", provider: "tamara", orderId, raw: {} };
+		expect((await webhook("approved", approved)).error).not.toBeNull();
+		expect((await webhook("approved", approved)).error).toBeNull();
+		expect(stored).toMatchObject({ status: "fully_captured", capturedAmountMinor: 4000 });
+		expect(journal()).toEqual(["completed"]);
+	});
+	it("maps an authorise recovery failure to AUTHORISE_FAILED", async () => {
+		const authorize = vi.fn(async () => {
+			throw new BnplProviderError("tamara", "timed out");
+		});
+		const fetchOrder = vi.fn(async (): Promise<BnplOrderState> => {
+			throw new BnplProviderError("tamara", "order read failed");
+		});
+		const { post } = await setup("tamara", { authorize, fetchOrder }, { status: "approved" });
+		await post("authorise");
+		const retry = await post("authorise");
+		expect(retry.error?.status).toBe(502);
+		expect((retry.error as { code?: string } | null)?.code).toBe("AUTHORISE_FAILED");
 	});
 });

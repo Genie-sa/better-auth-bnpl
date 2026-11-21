@@ -25,7 +25,7 @@ const requestBody: Record<Operation, Record<string, unknown> | undefined> = {
 		merchantReferenceId: "capture-ref",
 	},
 	refund: { totalAmount: { amount: "10.00", currency: "SAR" }, merchantRefundId: "refund-ref" },
-	cancel: { totalAmount: { amount: "10.00", currency: "SAR" }, merchantReferenceId: "cancel-ref" },
+	cancel: { totalAmount: { amount: "50.00", currency: "SAR" }, merchantReferenceId: "cancel-ref" },
 	void: {},
 	close: undefined,
 	authorise: undefined,

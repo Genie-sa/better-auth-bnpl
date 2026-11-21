@@ -1059,7 +1059,7 @@ describe("Tamara cancellation notification snapshots", () => {
 		});
 		expect(get).toHaveBeenCalledTimes(1);
 	});
-	it("replays the frozen validated financial snapshot when the order write initially fails", async () => {
+	it("re-verifies fresh native history when the order write initially fails", async () => {
 		const { instance, row, state, get, notify, onUpdated, onCanceled } = await setupTamara();
 		const context = await instance.auth.$context;
 		const original = context.adapter.incrementOne.bind(context.adapter);
@@ -1080,14 +1080,14 @@ describe("Tamara cancellation notification snapshots", () => {
 			],
 		});
 		expect((await notify()).error).toBeNull();
-		expect(row).toMatchObject({ canceledAmountMinor: 2500, status: "authorised" });
-		expect(onUpdated).toHaveBeenCalledTimes(1);
-		expect(onCanceled).not.toHaveBeenCalled();
-		expect(get).toHaveBeenCalledTimes(1);
+		expect(row).toMatchObject({ canceledAmountMinor: 10000, status: "canceled" });
+		expect(onCanceled).toHaveBeenCalledTimes(1);
+		expect(onUpdated).not.toHaveBeenCalled();
+		expect(get).toHaveBeenCalledTimes(2);
 	});
 
-	it("rejects a frozen cancellation snapshot that becomes stale before its order write", async () => {
-		const { instance, row, get, notify, onUpdated, onCanceled } = await setupTamara();
+	it("recovers when a concurrent capture lands between the checkpoint and the order write", async () => {
+		const { instance, row, state, get, notify, onUpdated } = await setupTamara();
 		const context = await instance.auth.$context;
 		const original = context.adapter.incrementOne.bind(context.adapter);
 		const write = vi.spyOn(context.adapter, "incrementOne").mockImplementation(async (args) => {
@@ -1097,12 +1097,26 @@ describe("Tamara cancellation notification snapshots", () => {
 		});
 		expect((await notify()).error?.status).toBe(500);
 		write.mockRestore();
-		row.canceledAmountMinor = 5000;
-		expect((await notify()).error?.status).toBe(500);
-		expect(row.canceledAmountMinor).toBe(5000);
-		expect(onUpdated).not.toHaveBeenCalled();
-		expect(onCanceled).not.toHaveBeenCalled();
-		expect(get).toHaveBeenCalledTimes(1);
+		Object.assign(row, {
+			status: "partially_captured",
+			capturedAmountMinor: 3000,
+			appliedOperations: JSON.stringify(["tamara:captured:capture-1"]),
+		});
+		Object.assign(state, {
+			capturedAmountMinor: 3000,
+			operations: [
+				{ kind: "captured", id: "capture-1", amountMinor: 3000, currency: "SAR" },
+				{ kind: "canceled", id: "native-cancel", amountMinor: 2500, currency: "SAR" },
+			],
+		});
+		expect((await notify()).error).toBeNull();
+		expect(row).toMatchObject({
+			status: "partially_captured",
+			capturedAmountMinor: 3000,
+			canceledAmountMinor: 2500,
+		});
+		expect(onUpdated).toHaveBeenCalledTimes(1);
+		expect(get).toHaveBeenCalledTimes(2);
 	});
 	it("resumes historical string-array callback checkpoints", async () => {
 		const { instance, notify, onUpdated } = await setupTamara();
